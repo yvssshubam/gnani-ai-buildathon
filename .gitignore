@@ -1,0 +1,46 @@
+# ---- secrets: never commit ----
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+
+# ---- Python ----
+.venv/
+venv/
+env/
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# ---- audio produced while testing (costs credits to make, but not needed in the repo) ----
+check_audio/
+audio_cache/
+tts_cache/
+stt_cache/
+# recordings of real voices (yours, friends') stay off GitHub
+recordings/
+
+# ---- local data: tickets from test calls ----
+*.db
+*.sqlite
+*.sqlite3
+*.log
+
+# ---- frontend (later phase) ----
+node_modules/
+dist/
+build/
+.next/
+
+# ---- editors / OS ----
+.vscode/
+.idea/
+*.swp
+.DS_Store
+Thumbs.db
