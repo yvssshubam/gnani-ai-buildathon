@@ -99,11 +99,14 @@ class LanguageTracker:
 
     - The first utterance with at least MIN_WORDS words locks the language.
       Shorter ones ("help! help!") only set a tentative language.
-    - After locking, switching needs SWITCH_AFTER consecutive utterances
-      in the new language (e.g. the phone is handed to someone else).
+    - After locking, a full sentence (SWITCH_WORDS+ words) in another language switches at once:
+      the caller changed language, or the phone was handed to someone else.
+    - Short replies ("no", "ok", "haan") in another language need SWITCH_AFTER in a row,
+      so one stray word doesn't flip the whole call.
     """
 
     MIN_WORDS = 3
+    SWITCH_WORDS = 4
     SWITCH_AFTER = 2
 
     def __init__(self) -> None:
@@ -126,6 +129,11 @@ class LanguageTracker:
             self._pending, self._pending_count = None, 0
             return self.current
 
+        if len(text.split()) >= self.SWITCH_WORDS:
+            self.current = detected
+            self._pending, self._pending_count = None, 0
+            return self.current
+
         if detected == self._pending:
             self._pending_count += 1
         else:
@@ -140,7 +148,7 @@ class LanguageTracker:
 def reply_language(call_lang: Optional[str]) -> tuple[str, bool]:
     """Language we answer in, and whether an interpreter is needed."""
     if call_lang is None:
-        return "ta-IN", False  # Chennai default until we hear the caller
+        return settings.fallback_reply_lang, False  # until we hear the caller
     if call_lang in settings.supported_reply_langs:
         return call_lang, False
     return settings.fallback_reply_lang, True

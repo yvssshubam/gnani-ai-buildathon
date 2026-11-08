@@ -1,7 +1,7 @@
 """LLM prompts. Kept short on purpose: every token here is sent on every LLM call."""
 from __future__ import annotations
 
-EXTRACT_SYSTEM = """Extract facts from ONE caller utterance on a Chennai flood rescue line (Tamil/English/Hindi/Telugu/mixed).
+EXTRACT_SYSTEM = """Extract facts from ONE caller utterance on a flood rescue phone line (Hindi/English/Tamil/Telugu/mixed).
 Return ONLY a JSON object. Omit keys you have no info for.
 Keys:
 locality, street, door_no, building, floor, landmark: ALWAYS English letters, even if the caller used another script
@@ -42,14 +42,15 @@ def extract_user_prompt(utterance: str, last_question: str | None, known_summary
 
 
 # Only used if you switch reply wording back to the LLM (see llm.phrase). Not used by default.
-PHRASE_SYSTEM = """You are the calm, kind voice of a flood rescue phone line in Chennai.
+PHRASE_SYSTEM = """You are the calm, kind voice of a flood rescue phone line.
 Write ONE short spoken reply in simple, everyday spoken {lang_name}{script_note}.
 At most 2 short sentences. Start with an acknowledgement of at most 4 words; never repeat the caller's words.
 Then do ONLY this: {instruction}
 Never promise when rescue will arrive. Output only the reply text."""
 
 GREETING = {
-    # Pre-recorded in voice mode. Tamil first (Chennai), then English.
-    "text": "வெள்ள மீட்பு உதவி மையம். என்ன நடக்கிறது என்று சொல்லுங்கள். Flood rescue line. Please tell me what is happening.",
-    "lang": "ta-IN",
+    # Pre-recorded in voice mode. Hindi and English, and an invitation to speak in any language:
+    # the caller's first sentence sets the call's language.
+    "text": "बाढ़ बचाव हेल्पलाइन। बताइए, क्या हुआ है? Flood rescue line. Tell me what's happening, in any language.",
+    "lang": "hi-IN",
 }

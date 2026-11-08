@@ -115,6 +115,16 @@ class OpenAICompatLLM:
             log.warning("extract failed: %s", e)
             return Extraction(unclear=True)
 
+    def chat_json(self, system: str, user: str) -> tuple[dict, int]:
+        """Any small JSON job (call notes, the notes check). Raises on failure: callers fall back."""
+        out, tokens = self._chat([{"role": "system", "content": system}, {"role": "user", "content": user}], json_mode=True)
+        return json.loads(out), tokens
+
+    def chat_text(self, system: str, user: str) -> str:
+        """Any small text job (the simulated caller). Raises on failure."""
+        out, _ = self._chat([{"role": "system", "content": system}, {"role": "user", "content": user}], json_mode=False)
+        return out.strip().strip('"')
+
     def phrase(self, instruction, lang, utterance, fallback_text) -> str:
         lang_name = LANG_NAMES.get(lang, "English")
         script_note = "" if lang == "en-IN" else f", written in {lang_name} script (English words like 'floor' may stay in English)"
@@ -241,6 +251,12 @@ class FakeLLM:
 
     def phrase(self, instruction, lang, utterance, fallback_text) -> str:
         return fallback_text
+
+    def chat_json(self, system: str, user: str) -> tuple[dict, int]:
+        raise NotImplementedError("the offline fake LLM has no free-form jobs; callers use their rule-based fallback")
+
+    def chat_text(self, system: str, user: str) -> str:
+        raise NotImplementedError("the offline fake LLM has no free-form jobs; callers use their rule-based fallback")
 
 
 def make_llm() -> LLM:

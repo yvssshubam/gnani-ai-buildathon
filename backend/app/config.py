@@ -37,5 +37,33 @@ class Settings:
     max_turns: int = int(os.getenv("MAX_TURNS", "10"))
     db_path: str = os.getenv("DB_PATH", "flood_sos.db")
 
+    # --- Gnani voice (Phase 2) ---
+    gnani_api_key: str = os.getenv("GNANI_API_KEY", "").strip()
+    gnani_base_url: str = os.getenv("GNANI_BASE_URL", "https://api.vachana.ai")
+    gnani_timeout: float = float(os.getenv("GNANI_TIMEOUT_SECONDS", "15"))
+
+    # Prisma v3.0 REST: one request per caller turn. Languages are hints, not a lock (max 4).
+    stt_model: str = os.getenv("STT_MODEL", "prisma-v3.0")
+    stt_languages: str = os.getenv("STT_LANGUAGES", "hi-IN,en-IN,ta-IN,te-IN")
+    stt_format: str = os.getenv("STT_FORMAT", "codemix")
+
+    # Timbre v2.5. One voice per reply language: "lang:Voice,lang:Voice".
+    tts_model: str = os.getenv("TTS_MODEL", "timbre-v2.5")
+    tts_voices: dict[str, str] = dict(
+        pair.split(":", 1) for pair in
+        os.getenv("TTS_VOICES", "ta-IN:Noopur,hi-IN:Yashvi,te-IN:Lehara,en-IN:Shlok").split(",")
+        if ":" in pair
+    )
+    tts_sample_rate: int = int(os.getenv("TTS_SAMPLE_RATE", "16000"))
+    tts_speed: float = float(os.getenv("TTS_SPEED", "1.0"))
+    tts_cache_dir: str = os.getenv("TTS_CACHE_DIR", "tts_cache")
+
+    # Simulated callers (demo): a different voice from the agent's, per language.
+    sim_caller_voices: dict[str, str] = dict(
+        pair.split(":", 1) for pair in
+        os.getenv("SIM_CALLER_VOICES", "hi-IN:Chitra,ta-IN:Trisha,te-IN:Lavanya,en-IN:Trupti").split(",")
+        if ":" in pair
+    )
+
 
 settings = Settings()

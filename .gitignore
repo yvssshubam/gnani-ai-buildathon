@@ -23,6 +23,7 @@ check_audio/
 audio_cache/
 tts_cache/
 stt_cache/
+*.wav
 # recordings of real voices (yours, friends') stay off GitHub
 recordings/
 

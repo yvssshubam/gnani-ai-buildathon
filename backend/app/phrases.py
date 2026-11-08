@@ -16,6 +16,7 @@ from .gazetteer import native_name
 PHRASES: dict[str, dict[str, str]] = {
     "en-IN": {
         "ack": "Okay.",
+        "not_heard": "Sorry, I could not hear you. Please say that again.",
         "calm": "I am here with you. Take a breath, we will do this together.",
         "ans_when_help": "I can't give an exact time, but your request is going to the rescue teams right now.",
         "ans_stay_or_move": "Stay where you are. If it is safe, go to the highest floor or terrace. Do not walk into the water.",
@@ -26,6 +27,8 @@ PHRASES: dict[str, dict[str, str]] = {
         "danger2": "Is anyone hurt? Yes or no.",
         "area1": "Where are you? Tell me the area and the street name.",
         "area2": "Just tell me the area name, or any big temple, school or bus stop near you.",
+        "area3": "Can you see a temple, school, water tank or tall building near you? Tell me its name.",
+        "again": "Take your time.",
         "street1": "Which street, and what is the house number or building name? Which floor are you on?",
         "street2": "Is there any big temple, school, church or shop near your house?",
         "floor1": "Which floor are you on?",
@@ -49,6 +52,7 @@ PHRASES: dict[str, dict[str, str]] = {
     },
     "ta-IN": {
         "ack": "சரி.",
+        "not_heard": "மன்னிக்கவும், சரியா கேக்கல. மறுபடியும் சொல்லுங்க.",
         "calm": "நான் உங்க கூடவே இருக்கேன். கொஞ்சம் மூச்சு விடுங்க, சேர்ந்து பார்த்துக்கலாம்.",
         "ans_when_help": "சரியான நேரம் சொல்ல முடியாது, ஆனா உங்க கோரிக்கை இப்பவே மீட்பு குழுவுக்கு போயிட்டு இருக்கு.",
         "ans_stay_or_move": "இருக்கற இடத்துலயே இருங்க. பாதுகாப்பா இருந்தா மேல் மாடிக்கோ மொட்டை மாடிக்கோ போங்க. தண்ணீர்ல நடக்காதீங்க.",
@@ -59,6 +63,8 @@ PHRASES: dict[str, dict[str, str]] = {
         "danger2": "யாருக்காவது அடிபட்டிருக்கா? ஆமா இல்லன்னு சொல்லுங்க.",
         "area1": "நீங்க எங்க இருக்கீங்க? ஏரியா பேரும் தெரு பேரும் சொல்லுங்க.",
         "area2": "ஏரியா பேர் மட்டும் சொல்லுங்க, இல்ல பக்கத்துல ஏதாவது பெரிய கோவில், ஸ்கூல், பஸ் ஸ்டாப்?",
+        "area3": "பக்கத்துல ஏதாவது கோவில், ஸ்கூல், தண்ணீர் தொட்டி இல்ல பெரிய கட்டடம் தெரியுதா? அதோட பேர் சொல்லுங்க.",
+        "again": "நிதானமா சொல்லுங்க.",
         "street1": "எந்த தெரு, வீட்டு நம்பர் இல்ல அபார்ட்மெண்ட் பேர் என்ன? எந்த மாடியில இருக்கீங்க?",
         "street2": "வீட்டு பக்கத்துல ஏதாவது பெரிய கோவில், ஸ்கூல், சர்ச் இல்ல கடை இருக்கா?",
         "floor1": "எந்த மாடியில இருக்கீங்க?",
@@ -81,6 +87,7 @@ PHRASES: dict[str, dict[str, str]] = {
     },
     "hi-IN": {
         "ack": "ठीक है।",
+        "not_heard": "माफ़ कीजिए, आवाज़ नहीं आई। कृपया फिर से बोलिए।",
         "calm": "मैं आपके साथ हूँ। एक गहरी साँस लीजिए, हम मिलकर संभाल लेंगे।",
         "ans_when_help": "सही समय नहीं बता सकते, लेकिन आपकी रिक्वेस्ट अभी बचाव टीम को भेजी जा रही है।",
         "ans_stay_or_move": "जहाँ हैं वहीं रहिए। सुरक्षित हो तो सबसे ऊपर की मंज़िल या छत पर जाइए। पानी में मत चलिए।",
@@ -91,6 +98,8 @@ PHRASES: dict[str, dict[str, str]] = {
         "danger2": "क्या किसी को चोट लगी है? हाँ या ना बताइए।",
         "area1": "आप कहाँ हैं? इलाके का नाम और गली का नाम बताइए।",
         "area2": "बस इलाके का नाम बताइए, या पास का कोई बड़ा मंदिर, स्कूल या बस स्टॉप।",
+        "area3": "आपके पास कोई मंदिर, स्कूल, पानी की टंकी या ऊँची इमारत दिखती है? उसका नाम बताइए।",
+        "again": "आराम से बताइए।",
         "street1": "कौन सी गली, और मकान नंबर या बिल्डिंग का नाम क्या है? आप किस मंज़िल पर हैं?",
         "street2": "घर के पास कोई बड़ा मंदिर, स्कूल, चर्च या दुकान है?",
         "floor1": "आप किस मंज़िल पर हैं?",
@@ -113,6 +122,7 @@ PHRASES: dict[str, dict[str, str]] = {
     },
     "te-IN": {
         "ack": "సరే.",
+        "not_heard": "క్షమించండి, సరిగ్గా వినిపించలేదు. దయచేసి మళ్ళీ చెప్పండి.",
         "calm": "నేను మీతోనే ఉన్నాను. ఒక్కసారి ఊపిరి తీసుకోండి, కలిసి చూసుకుందాం.",
         "ans_when_help": "సరైన సమయం చెప్పలేను, కానీ మీ అభ్యర్థన ఇప్పుడే రెస్క్యూ టీమ్‌కు వెళ్తోంది.",
         "ans_stay_or_move": "ఉన్న చోటే ఉండండి. సురక్షితంగా ఉంటే పై అంతస్తుకు లేదా టెర్రస్‌కు వెళ్ళండి. నీళ్ళలో నడవకండి.",
@@ -123,6 +133,8 @@ PHRASES: dict[str, dict[str, str]] = {
         "danger2": "ఎవరికైనా దెబ్బ తగిలిందా? అవును లేదా కాదు చెప్పండి.",
         "area1": "మీరు ఎక్కడ ఉన్నారు? ఏరియా పేరు, వీధి పేరు చెప్పండి.",
         "area2": "ఏరియా పేరు మాత్రం చెప్పండి, లేదా దగ్గర్లో ఏదైనా పెద్ద గుడి, స్కూల్, బస్ స్టాప్?",
+        "area3": "మీ దగ్గర్లో ఏదైనా గుడి, స్కూల్, నీళ్ళ ట్యాంక్ లేదా పెద్ద బిల్డింగ్ కనిపిస్తుందా? దాని పేరు చెప్పండి.",
+        "again": "నెమ్మదిగా చెప్పండి.",
         "street1": "ఏ వీధి, ఇంటి నంబర్ లేదా బిల్డింగ్ పేరు ఏంటి? మీరు ఏ అంతస్తులో ఉన్నారు?",
         "street2": "మీ ఇంటి దగ్గర ఏదైనా పెద్ద గుడి, స్కూల్, చర్చి లేదా షాప్ ఉందా?",
         "floor1": "మీరు ఏ అంతస్తులో ఉన్నారు?",
@@ -172,6 +184,10 @@ def _p(lang: str) -> dict[str, str]:
 
 def say(key: str, lang: str, **kw) -> str:
     return _p(lang)[key].format(**kw)
+
+
+def has(key: str, lang: str) -> bool:
+    return key in _p(lang)
 
 
 def floor_number(floor: Optional[str]) -> Optional[int | str]:

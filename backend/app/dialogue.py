@@ -198,6 +198,7 @@ class CallSession:
         self.facts_changed = False  # did the last caller turn change any fact on the ticket
         self.questions_seen: set[str] = set()  # caller questions already answered this call
         self.last_dont_know = False            # was the previous caller turn "I don't know"
+        self.last_parts: list[str] = []        # the last reply, split into its spoken parts (voice caches each)
 
     # ------------------------------------------------------------------ public
     def greeting(self) -> str:
@@ -360,7 +361,11 @@ class CallSession:
         for slot in SLOT_ORDER:
             if not self._slot_filled(slot) and self.attempts[slot] < self._max_attempts(slot):
                 self.attempts[slot] += 1
-                variant = 2 if (self.panic and slot in SIMPLE_WHEN_PANIC) else self.attempts[slot]
+                if self.panic and slot in SIMPLE_WHEN_PANIC:
+                    # simple version first; asked again, a different (even simpler) wording, never the same words
+                    variant = 2 if self.attempts[slot] == 1 else 3
+                else:
+                    variant = self.attempts[slot]
                 return Action("ask", slot=slot, attempt=variant)
 
         return self._readback_or_close()
@@ -380,7 +385,11 @@ class CallSession:
     def _line(self, a: Action, lang: str) -> str:
         t = self.ticket
         if a.kind == "ask":
-            return phrases.say(f"{a.slot}{a.attempt}", lang)
+            key = f"{a.slot}{a.attempt}"
+            if phrases.has(key, lang):
+                return phrases.say(key, lang)
+            # no third wording for this question: soften the repeat instead of saying the same words cold
+            return f'{phrases.say("again", lang)} {phrases.say(f"{a.slot}2", lang)}'
         if a.kind == "readback":
             return phrases.say("readback", lang, details=phrases.readback_details(t, lang))
         if a.kind == "ask_correction":
@@ -417,6 +426,7 @@ class CallSession:
         if e.caller_question in ANSWERABLE:
             parts.append(phrases.say(f"ans_{e.caller_question}", lang))
         parts.append(self._line(a, lang))
+        self.last_parts = parts
         return " ".join(parts)
 
     def _needs_location_callback(self) -> bool:
@@ -465,6 +475,10 @@ class CallSession:
     def _result(self, reply: str, action: Optional[Action]) -> dict:
         return {
             "reply": reply,
+            # Same text as `reply`, split into parts. Fixed parts ("Okay.", the next question) are
+            # identical every call, so voice mode can cache their audio separately from the
+            # parts that change (LLM acknowledgement, read-back).
+            "reply_parts": list(self.last_parts) if action else [],
             "reply_lang": reply_language(self.ticket.language)[0],
             "action": action.key if action else None,
             "done": self.done,
