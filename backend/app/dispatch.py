@@ -56,7 +56,8 @@ class Dispatch:
     # ------------------------------------------------------------- shift
     def shift_start(self) -> float:
         """Tickets from before this moment are hidden from the board (test calls, last shift)."""
-        row = self._db.execute("SELECT value FROM dispatch_settings WHERE key = 'shift_start'").fetchone()
+        with self._lock:
+            row = self._db.execute("SELECT value FROM dispatch_settings WHERE key = 'shift_start'").fetchone()
         return float(row[0]) if row else 0.0
 
     def start_shift(self) -> float:
@@ -69,8 +70,9 @@ class Dispatch:
 
     # ------------------------------------------------------------- reads
     def get(self, ticket_id: str) -> dict:
-        row = self._db.execute("SELECT ticket_id, created_at, team_id, field_status, taken_over, events "
-                               "FROM dispatch WHERE ticket_id = ?", (ticket_id,)).fetchone()
+        with self._lock:  # reads too: one SQLite connection, used from several threads
+            row = self._db.execute("SELECT ticket_id, created_at, team_id, field_status, taken_over, events "
+                                   "FROM dispatch WHERE ticket_id = ?", (ticket_id,)).fetchone()
         if not row:
             return {"ticket_id": ticket_id, "created_at": None, "team_id": None, "team": None,
                     "field_status": None, "taken_over": False, "events": []}
@@ -79,7 +81,8 @@ class Dispatch:
                 "field_status": row[3], "taken_over": bool(row[4]), "events": json.loads(row[5] or "[]")}
 
     def all(self) -> dict[str, dict]:
-        ids = [r[0] for r in self._db.execute("SELECT ticket_id FROM dispatch")]
+        with self._lock:
+            ids = [r[0] for r in self._db.execute("SELECT ticket_id FROM dispatch").fetchall()]
         return {i: self.get(i) for i in ids}
 
     def teams(self) -> list[dict]:

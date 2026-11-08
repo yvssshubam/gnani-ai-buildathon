@@ -14,14 +14,15 @@ import json
 import logging
 import re
 import time
+import unicodedata
 from typing import Optional, Protocol
 
 import httpx
 
 from . import prompts
 from .config import settings
-from .gazetteer import LOCALITIES
-from .language import LANG_NAMES
+from .gazetteer import LOCALITIES, clean_pincode
+from .language import LANG_NAMES, normalize_lang
 from .models import NEED_TYPES, VULNERABLE_TYPES, WATER_LEVELS, Extraction
 
 log = logging.getLogger("llm")
@@ -30,6 +31,39 @@ log = logging.getLogger("llm")
 class LLM(Protocol):
     def extract(self, utterance: str, last_question: Optional[str], known_summary: str) -> Extraction: ...
     def phrase(self, instruction: str, lang: str, utterance: Optional[str], fallback_text: str) -> str: ...
+
+
+# A street / building / landmark "name" made only of these is not a name ("our house",
+# "మా ఇల్లుంది", "हमारा घर", "எங்க வீடு"). Matched as word beginnings, in English letters and
+# in each script, because the LLM sometimes copies the words into the name field.
+_GENERIC_STEMS = (
+    # English
+    "house", "home", "building", "flat", "apartment", "place", "area", "street", "road", "here", "there",
+    # Hindi in English letters / Devanagari
+    "ghar", "makaan", "makan", "yahan", "wahan", "घर", "मकान", "यहाँ", "यहां", "वहाँ", "बिल्डिंग",
+    # Telugu in English letters / Telugu
+    "illu", "illa", "intlo", "inti", "ikkada", "akkada", "ఇల్ల", "ఇంట", "ఇక్కడ", "అక్కడ", "బిల్డింగ్",
+    # Tamil in English letters / Tamil
+    "veedu", "veetu", "veettu", "inga", "anga", "வீட", "இங்க", "அங்க", "பில்டிங்",
+)
+_FILLER_WORDS = {
+    "our", "my", "the", "a", "an", "this", "that", "it", "its", "it's", "is", "own", "same", "just", "only", "means",
+    "mera", "meri", "mere", "hamara", "hamari", "hamare", "apna", "apni", "hai", "wala", "wali", "matlab",
+    "मेरा", "मेरी", "मेरे", "हमारा", "हमारी", "हमारे", "अपना", "अपनी", "है", "वाला", "मतलब", "का", "की", "के",
+    "maa", "naa", "mana", "manadi", "undi", "ante", "మా", "నా", "మన", "ఉంది", "అంటే",
+    "enga", "en", "ennoda", "engaloda", "irukku", "ellam", "எங்க", "என்", "என்னோட", "இருக்கு", "அதான்",
+}
+
+
+def is_generic_place(value) -> bool:
+    """True if a place name is only everyday words: "Maa Illundhi" (= "it's our house")."""
+    if not isinstance(value, str):
+        return False
+    words = "".join(c.lower() if (c.isalnum() or unicodedata.category(c).startswith("M") or c == "'") else " "
+                    for c in value).split()
+    if not words:
+        return True
+    return all(w in _FILLER_WORDS or w.startswith(_GENERIC_STEMS) for w in words)
 
 
 def clean_extraction(raw: dict) -> Extraction:
@@ -42,10 +76,12 @@ def clean_extraction(raw: dict) -> Extraction:
     data["needs"] = [n for n in data.get("needs") or [] if n in NEED_TYPES]
     if data.get("confirmation") not in ("yes", "no"):
         data.pop("confirmation", None)
-    if data.get("caller_question") not in ("when_help", "stay_or_move", "electricity", "animal", "other"):
+    if data.get("caller_question") not in ("when_help", "stay_or_move", "electricity", "animal", "rephrase",
+                                           "go_ahead", "other"):
         data.pop("caller_question", None)
     if data.get("panic") not in ("low", "high"):
         data.pop("panic", None)
+    data["spoken_language"] = normalize_lang(data.get("spoken_language"))
     if isinstance(data.get("ack"), str):
         data["ack"] = data["ack"].strip().strip('"').strip() or None
     else:
@@ -61,11 +97,41 @@ def clean_extraction(raw: dict) -> Extraction:
                 "street_native", "building_native", "landmark_native"):
         if key in data and data[key] is not None:
             data[key] = str(data[key]).strip() or None
+    data["pincode"] = clean_pincode(data.get("pincode"))
+    if isinstance(data.get("reply"), str):
+        data["reply"] = data["reply"].strip().strip('"').strip() or None
+    else:
+        data.pop("reply", None)
+    for key in ("street", "building", "landmark"):
+        # "building? it's our house" is not a building name: drop it, and its native copy
+        if is_generic_place(data.get(key)) or (not data.get(key) and is_generic_place(data.get(f"{key}_native"))):
+            data.pop(key, None)
+            data.pop(f"{key}_native", None)
     for key in ("water_rising", "injured", "medical_emergency", "structure_unsafe", "trapped",
                 "correction", "asks_for_human", "unclear", "dont_know"):
         if key in data and not isinstance(data[key], bool):
             data.pop(key)
     return Extraction(**data)
+
+
+def _retry_after(r: httpx.Response, default: float) -> float:
+    try:
+        return max(0.0, float(r.headers.get("retry-after", default)))
+    except ValueError:
+        return default
+
+
+def _retry_wait(err: Exception) -> Optional[float]:
+    """Seconds to wait before one retry of the live extract, or None if retrying won't help.
+    A caller is waiting, so the wait is capped at 1.5 s, and a timeout (already 8 s) isn't retried."""
+    if isinstance(err, httpx.HTTPStatusError):
+        status = err.response.status_code
+        if status == 429:
+            return min(1.5, _retry_after(err.response, default=1.0))
+        return 0.3 if status >= 500 or status == 400 else None   # 400: Groq's json_validate_failed
+    if isinstance(err, ValueError):   # empty content, or JSON that didn't parse
+        return 0.0
+    return None
 
 
 class OpenAICompatLLM:
@@ -77,6 +143,8 @@ class OpenAICompatLLM:
             headers={"Authorization": f"Bearer {settings.llm_api_key}"},
             timeout=settings.llm_timeout,
         )
+        # After a 429, background work (notes) waits until this time so the live call gets the quota.
+        self.cooldown_until = 0.0
 
     def _chat(self, messages: list[dict], json_mode: bool) -> tuple[str, int]:
         body = {"model": settings.llm_model, "messages": messages, "temperature": 0.2,
@@ -87,6 +155,8 @@ class OpenAICompatLLM:
             body["response_format"] = {"type": "json_object"}
         t0 = time.perf_counter()
         r = self.client.post("/chat/completions", json=body)
+        if r.status_code == 429:
+            self.cooldown_until = time.time() + _retry_after(r, default=10.0)
         if r.status_code >= 400:
             log.warning("LLM HTTP %s: %s", r.status_code, r.text[:300])
         r.raise_for_status()
@@ -100,20 +170,25 @@ class OpenAICompatLLM:
         return content, tokens
 
     def extract(self, utterance, last_question, known_summary) -> Extraction:
-        try:
-            out, tokens = self._chat(
-                [
-                    {"role": "system", "content": prompts.EXTRACT_SYSTEM},
-                    {"role": "user", "content": prompts.extract_user_prompt(utterance, last_question, known_summary)},
-                ],
-                json_mode=True,
-            )
-            e = clean_extraction(json.loads(out))
-            e.tokens_used = tokens
-            return e
-        except Exception as e:  # network error, bad JSON, rate limit...
-            log.warning("extract failed: %s", e)
-            return Extraction(unclear=True)
+        messages = [
+            {"role": "system", "content": prompts.EXTRACT_SYSTEM},
+            {"role": "user", "content": prompts.extract_user_prompt(utterance, last_question, known_summary)},
+        ]
+        for attempt in (1, 2):
+            try:
+                out, tokens = self._chat(messages, json_mode=True)
+                e = clean_extraction(json.loads(out))
+                e.tokens_used = tokens
+                return e
+            except Exception as err:  # network error, bad JSON, rate limit...
+                wait = _retry_wait(err)
+                if attempt == 1 and wait is not None:
+                    log.warning("extract failed, retrying in %.1f s: %s", wait, err)
+                    time.sleep(wait)
+                    continue
+                log.warning("extract failed: %s", err)
+                return Extraction(unclear=True, llm_failed=True)
+        return Extraction(unclear=True, llm_failed=True)
 
     def chat_json(self, system: str, user: str) -> tuple[dict, int]:
         """Any small JSON job (call notes, the notes check). Raises on failure: callers fall back."""

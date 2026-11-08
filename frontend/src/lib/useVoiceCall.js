@@ -11,7 +11,11 @@ const SIM_MAX_TURNS = 16;   // safety stop for a simulated call
 // What the live ticket shows, in order, and how to read each from the ticket
 export const FIELDS = [
   { key: "language", label: "Language", value: (t) => LANGUAGE[t.language] || t.language },
-  { key: "area", label: "Area", value: (t) => t.location?.locality },
+  { key: "area", label: "Area", value: (t) => {
+    const l = t.location || {};
+    const pin = l.pincode ? `PIN ${l.pincode}` : null;
+    return [l.locality, pin].filter(Boolean).join(", ") || null;
+  } },
   { key: "address", label: "Address", value: (t) => {
     const l = t.location || {};
     const parts = [l.door_no && `Door ${l.door_no}`, l.building, l.street].filter(Boolean);
@@ -42,7 +46,7 @@ export function questionsAnswered(t) {
   if (!t) return 0;
   const l = t.location || {}, d = t.danger || {};
   const dangerKnown = [d.injured, d.medical_emergency, d.water_rising, d.structure_unsafe, d.trapped].some((v) => v != null) || Boolean(d.water_level);
-  return [dangerKnown, Boolean(l.locality), Boolean(l.street || l.door_no || l.building || l.landmark),
+  return [dangerKnown, Boolean(l.locality || l.pincode), Boolean(l.street || l.door_no || l.building || l.landmark),
     Boolean(l.floor), t.people_count != null, (t.vulnerable || []).length > 0 || Boolean(d.water_level), Boolean(d.water_level)]
     .filter(Boolean).length;
 }

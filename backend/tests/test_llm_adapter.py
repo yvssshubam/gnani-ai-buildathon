@@ -75,3 +75,43 @@ def test_phrase_asks_for_target_language():
         return reply("எத்தனை பேர் இருக்கீங்க?")
 
     assert make_llm(handler).phrase("Ask how many people", "ta-IN", "hi", "x") == "எத்தனை பேர் இருக்கீங்க?"
+
+def test_extract_retries_once_after_a_rate_limit(monkeypatch):
+    import app.llm as llm_mod
+    monkeypatch.setattr(llm_mod.time, "sleep", lambda s: None)
+    calls = []
+
+    def handler(request):
+        calls.append(1)
+        if len(calls) == 1:
+            return httpx.Response(429, headers={"retry-after": "7"}, json={"error": {"message": "rate limit"}})
+        return reply(json.dumps({"injured": False, "spoken_language": "hi"}))
+
+    llm = make_llm(handler)
+    e = llm.extract("किसी को भी चोट नहीं लगी है", "Is anyone hurt?", "")
+    assert len(calls) == 2 and e.injured is False and e.spoken_language == "hi-IN" and not e.llm_failed
+    assert llm.cooldown_until > 0            # notes wait for the quota to come back
+
+
+def test_extract_gives_up_after_two_failures_and_says_so(monkeypatch):
+    import app.llm as llm_mod
+    monkeypatch.setattr(llm_mod.time, "sleep", lambda s: None)
+    calls = []
+
+    def handler(request):
+        calls.append(1)
+        return httpx.Response(429, json={"error": {"message": "rate limit"}})
+
+    e = make_llm(handler).extract("...", None, "")
+    assert len(calls) == 2 and e.unclear and e.llm_failed
+
+
+def test_a_wrong_key_is_not_retried():
+    calls = []
+
+    def handler(request):
+        calls.append(1)
+        return httpx.Response(401, json={"error": {"message": "bad key"}})
+
+    e = make_llm(handler).extract("...", None, "")
+    assert len(calls) == 1 and e.llm_failed

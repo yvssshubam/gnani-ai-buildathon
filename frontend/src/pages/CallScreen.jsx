@@ -39,7 +39,9 @@ export default function CallScreen() {
             <Speaking call={call} />
             {call.active ? (
               <div className="phone-controls">
-                {call.phase === "hearing" && <button type="button" className="btn" onClick={call.finishNow}>Done speaking</button>}
+                {(call.phase === "hearing" || call.phase === "listening") && call.mode === "mic" && (
+                  <button type="button" className="btn" onClick={call.finishNow}>Done speaking</button>
+                )}
                 <button type="button" className="end-btn" onClick={call.hangUp}>End</button>
               </div>
             ) : (

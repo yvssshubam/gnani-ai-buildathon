@@ -11,6 +11,7 @@ from __future__ import annotations
 import re
 from typing import Optional
 
+from .gazetteer import clean_pincode
 from .models import Extraction
 
 MAX_WORDS = 4
@@ -150,6 +151,11 @@ def quick_parse(text: str, last_action_key: Optional[str]) -> Optional[Extractio
     if not last_action_key:
         return None
     t = _norm(text)
+    # a bare PIN code ("600042", "6 0 0 0 4 2") answering where they are
+    if last_action_key in ("ask:area", "ask:street") and t and re.fullmatch(r"[\d\s\W]+", t, flags=re.UNICODE):
+        pin = clean_pincode(t)
+        if pin:
+            return Extraction(pincode=pin)
     if not t or not _is_short(t):
         return None
 

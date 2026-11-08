@@ -141,8 +141,11 @@ class Notes:
 
     # ------------------------------------------------------------ storage
     def get(self, ticket_id: str) -> dict:
-        row = self._db.execute("SELECT summary, details, translations, operator_notes, check_items, checked_at, updated_at "
-                               "FROM call_notes WHERE ticket_id = ?", (ticket_id,)).fetchone()
+        # Reads take the lock too: the note-taker writes from a background thread while the
+        # dashboard reads, and one SQLite connection can't be used by two threads at once.
+        with self._lock:
+            row = self._db.execute("SELECT summary, details, translations, operator_notes, check_items, checked_at, updated_at "
+                                   "FROM call_notes WHERE ticket_id = ?", (ticket_id,)).fetchone()
         if not row:
             return {"summary": None, "details": [], "translations": {}, "operator_notes": "",
                     "check": None, "checked_at": None, "updated_at": None}
@@ -185,6 +188,10 @@ class Notes:
         self._running.add(ticket_id)
         try:
             while True:
+                # The LLM is rate limited: let the live call have the quota, then write the notes.
+                wait = getattr(self.llm, "cooldown_until", 0.0) - time.time()
+                if wait > 0:
+                    await asyncio.sleep(min(wait, 30.0))
                 self._dirty.discard(ticket_id)
                 await run_in_threadpool(self.update_now, ticket_id)
                 if ticket_id not in self._dirty:

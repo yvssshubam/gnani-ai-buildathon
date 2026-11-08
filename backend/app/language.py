@@ -9,6 +9,7 @@ single English word ("first floor") doesn't flip the whole conversation.
 """
 from __future__ import annotations
 
+import unicodedata
 from typing import Optional
 
 from .config import settings
@@ -94,19 +95,78 @@ def detect_script_language(text: str) -> Optional[str]:
     return detect_roman_language(text) or "en-IN"
 
 
+# What the LLM may answer for spoken_language, mapped to our codes
+_LANG_ALIASES = {
+    "hi": "hi-IN", "hindi": "hi-IN", "en": "en-IN", "english": "en-IN",
+    "ta": "ta-IN", "tamil": "ta-IN", "te": "te-IN", "telugu": "te-IN",
+    "kn": "kn-IN", "kannada": "kn-IN", "ml": "ml-IN", "malayalam": "ml-IN",
+    "bn": "bn-IN", "bengali": "bn-IN", "gu": "gu-IN", "gujarati": "gu-IN",
+    "pa": "pa-IN", "punjabi": "pa-IN", "or": "or-IN", "odia": "or-IN", "mr": "mr-IN", "marathi": "mr-IN",
+}
+
+
+def normalize_lang(value) -> Optional[str]:
+    """ "hi", "Hindi", "hi-IN" -> "hi-IN". Anything else -> None."""
+    if not isinstance(value, str):
+        return None
+    v = value.strip().lower()
+    if v in _LANG_ALIASES:
+        return _LANG_ALIASES[v]
+    code = v.split("-")[0]
+    return _LANG_ALIASES.get(code) if code in _LANG_ALIASES else None
+
+
+def judge_turn(stt_lang: Optional[str], text: str, spoken: Optional[str],
+               llm_failed: bool = False) -> tuple[Optional[str], bool]:
+    """Which language this caller turn is in, and whether we're sure.
+
+    Prisma's tag can be wrong in a way the letters can't catch: Hindi speech written in Tamil
+    letters, tagged ta-IN. So the LLM, which reads the words, also says which language they are
+    ("முஜே பச்சாவோ" is "mujhe bachao": Hindi). Its answer wins when they disagree, but only a
+    turn where the speech tag (or, for typed text, the letters) and the LLM agree is "sure".
+    Only a sure turn can switch the call at once; anything else needs two turns in a row.
+    """
+    observed = stt_lang or detect_script_language(text)
+    if spoken:
+        return spoken, spoken == observed
+    # No LLM verdict. Typed text: the letters are reliable.
+    if stt_lang is None:
+        return observed, True
+    # Speech, and the LLM failed: Prisma's tag matching the letters it wrote is the best we have.
+    # (If that was wrong, the next turn can switch back: requests to Prisma no longer lean
+    # toward the call's language.) A quick-parsed short reply: the tag alone is not enough.
+    return observed, llm_failed and observed == detect_script_language(text)
+
+
+def letter_count(text: str) -> int:
+    """Characters that aren't spaces, punctuation or symbols (vowel signs count, so Telugu,
+    Tamil and Hindi are measured fairly)."""
+    return sum(1 for c in text if unicodedata.category(c)[0] not in "PZS")
+
+
+def is_full_sentence(text: str, words: int, letters: int) -> bool:
+    """By words OR letters: Telugu and Tamil say a whole sentence in few, long words
+    ("లేదు, ఎవరికీ తగలలేదు" = "no, nobody got hurt" is 3 words but 17 letters)."""
+    return len(text.split()) >= words or letter_count(text) >= letters
+
+
 class LanguageTracker:
     """Keeps the call's language stable.
 
-    - The first utterance with at least MIN_WORDS words locks the language.
+    - The first utterance with at least MIN_WORDS words (or MIN_LETTERS letters) locks the language.
       Shorter ones ("help! help!") only set a tentative language.
-    - After locking, a full sentence (SWITCH_WORDS+ words) in another language switches at once:
-      the caller changed language, or the phone was handed to someone else.
-    - Short replies ("no", "ok", "haan") in another language need SWITCH_AFTER in a row,
-      so one stray word doesn't flip the whole call.
+    - After locking, a full sentence (SWITCH_WORDS+ words or SWITCH_LETTERS+ letters) in another
+      language switches at once,
+      if we're sure of its language (see judge_turn): the caller changed language, or the phone
+      was handed to someone else.
+    - Short replies ("no", "ok", "haan"), and sentences whose language we're not sure of, need
+      SWITCH_AFTER in a row, so one stray word or one wrong guess doesn't flip the whole call.
     """
 
     MIN_WORDS = 3
+    MIN_LETTERS = 10
     SWITCH_WORDS = 4
+    SWITCH_LETTERS = 12   # "ok thank you" is 10, so stray English replies still need two in a row
     SWITCH_AFTER = 2
 
     def __init__(self) -> None:
@@ -115,10 +175,10 @@ class LanguageTracker:
         self._pending: Optional[str] = None
         self._pending_count = 0
 
-    def update(self, detected: Optional[str], text: str = "") -> Optional[str]:
+    def update(self, detected: Optional[str], text: str = "", sure: bool = True) -> Optional[str]:
         if not detected:
             return self.current
-        long_enough = len(text.split()) >= self.MIN_WORDS
+        long_enough = is_full_sentence(text, self.MIN_WORDS, self.MIN_LETTERS)
 
         if not self.locked:
             self.current = detected
@@ -129,7 +189,7 @@ class LanguageTracker:
             self._pending, self._pending_count = None, 0
             return self.current
 
-        if len(text.split()) >= self.SWITCH_WORDS:
+        if sure and is_full_sentence(text, self.SWITCH_WORDS, self.SWITCH_LETTERS):
             self.current = detected
             self._pending, self._pending_count = None, 0
             return self.current

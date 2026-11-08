@@ -25,32 +25,27 @@ READBACK_PIECES = {"people", "person", "including", "at", "near", "door", "floor
                    "ground", "terrace", "none", "sep"}
 
 
-# Script of each language's own letters, to pick that language's place names
-_SCRIPTS = {"ta-IN": (0x0B80, 0x0BFF), "te-IN": (0x0C00, 0x0C7F), "hi-IN": (0x0900, 0x097F)}
+# Every request to Prisma is the same whatever language the call is in: the same language hints
+# in the same order (STT_LANGUAGES), English place names only, and the agent's question in
+# English as context. Shaping them by the call's language (that language first, its script's
+# place names, the agent's line in its script) made one wrong guess stick: once Prisma wrote
+# Hindi in Tamil letters, every later request pushed it further toward Tamil, and the caller
+# could no longer switch language.
 
 
-def _in_script(word: str, lang: str) -> bool:
-    lo, hi = _SCRIPTS[lang]
-    return any(lo <= ord(c) <= hi for c in word)
-
-
-def keyterms(lang: Optional[str] = None) -> list[str]:
-    """Area names to boost in speech recognition. Always the English spellings; names in another
-    script only once the call is in that language. Sending Tamil-script names on every request
-    pushed Prisma to write Hindi speech in Tamil letters."""
+def keyterms() -> list[str]:
+    """Area names to boost in speech recognition, English spellings only."""
     terms: list[str] = []
     for loc in LOCALITIES:
         terms.append(loc["name"])
-        terms.extend(a for a in loc["aliases"] if a.isascii() or (lang in _SCRIPTS and _in_script(a, lang)))
+        terms.extend(a for a in loc["aliases"] if a.isascii())
     return list(dict.fromkeys(terms))[:200]
 
 
-def languages_for(lang: Optional[str]) -> str:
-    """The language hints for Prisma, with the call's language first once it's known."""
-    hints = [x.strip() for x in settings.stt_languages.split(",") if x.strip()]
-    if lang and lang in hints:
-        hints = [lang] + [x for x in hints if x != lang]
-    return ",".join(hints[:4])
+def stt_context(question_en: Optional[str]) -> Optional[str]:
+    """The previous_text for Prisma: the agent's last question in English, or nothing
+    (STT_CONTEXT=none) if English context ever pulls Indian-language answers into English letters."""
+    return question_en if settings.stt_context == "question_en" else None
 
 
 def fixed_lines(langs: list[str], extra: Optional[list[tuple[str, str]]] = None) -> list[tuple[str, str]]:
@@ -67,7 +62,7 @@ def fixed_lines(langs: list[str], extra: Optional[list[tuple[str, str]]] = None)
 class VoiceState:
     """What the voice layer remembers per call (the dialogue engine keeps everything else)."""
     reply_lang: str
-    last_agent_text: Optional[str] = None
+    last_agent_text: Optional[str] = None   # the agent's last question, in English (STT context)
     not_heard_in_a_row: int = 0
 
 
@@ -92,9 +87,7 @@ async def speak(tts: TimbreTTS, parts: list[str], lang: str) -> tuple[list[Optio
 async def voice_turn(session, state: VoiceState, audio: bytes, filename: str,
                      stt: PrismaSTT, tts: TimbreTTS) -> dict:
     """Raises GnaniError if speech recognition fails (the caller should be asked to repeat)."""
-    lang = getattr(getattr(session, "ticket", None), "language", None)
-    tr = await stt.transcribe(audio, filename=filename, previous_text=state.last_agent_text,
-                              keyterms=keyterms(lang), languages=languages_for(lang))
+    tr = await stt.transcribe(audio, filename=filename, previous_text=stt_context(state.last_agent_text))
 
     if not tr.text:
         # Silence, wind, rain: don't count it as a turn and don't call the LLM. Ask again.
@@ -111,7 +104,8 @@ async def voice_turn(session, state: VoiceState, audio: bytes, filename: str,
     parts = result.get("reply_parts") or ([result["reply"]] if result.get("reply") else [])
     urls, tts_ms, tts_error = await speak(tts, parts, result["reply_lang"])
     if result.get("reply"):
-        state.last_agent_text = result["reply"]
+        question = getattr(session, "question_en", None)
+        state.last_agent_text = question() if callable(question) else None
 
     result.update({
         "heard": tr.text,

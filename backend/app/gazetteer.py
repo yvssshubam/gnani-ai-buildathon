@@ -217,6 +217,14 @@ def native_name(locality: Optional[str], lang: str) -> Optional[str]:
     return locality
 
 
+def clean_pincode(value) -> Optional[str]:
+    """An Indian PIN code: 6 digits, not starting with 0. Digits in any script; spaces allowed."""
+    if value is None:
+        return None
+    digits = "".join(str(unicodedata.digit(c)) for c in str(value) if unicodedata.digit(c, None) is not None)
+    return digits if len(digits) == 6 and digits[0] != "0" else None
+
+
 def resolve(location: Location) -> Location:
     """Fill coordinates and confidence from whatever parts of the address we have."""
     loc = match_locality(location.locality)
@@ -236,7 +244,7 @@ def resolve(location: Location) -> Location:
     if not is_english_letters(location.landmark) and (location.landmark or location.landmark_native):
         location.landmark = to_english_letters(location.landmark or location.landmark_native)
 
-    has_locality = loc is not None
+    has_locality = loc is not None or bool(location.pincode)   # a PIN code narrows it to an area
     has_street = bool(location.street)
     has_point = bool(location.door_no or location.building)
 

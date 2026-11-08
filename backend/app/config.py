@@ -46,6 +46,9 @@ class Settings:
     stt_model: str = os.getenv("STT_MODEL", "prisma-v3.0")
     stt_languages: str = os.getenv("STT_LANGUAGES", "hi-IN,en-IN,ta-IN,te-IN")
     stt_format: str = os.getenv("STT_FORMAT", "codemix")
+    # Context sent with each caller turn: "question_en" (the agent's last question, in English)
+    # or "none".
+    stt_context: str = os.getenv("STT_CONTEXT", "question_en").strip().lower()
 
     # Timbre v2.5. One voice per reply language: "lang:Voice,lang:Voice".
     tts_model: str = os.getenv("TTS_MODEL", "timbre-v2.5")

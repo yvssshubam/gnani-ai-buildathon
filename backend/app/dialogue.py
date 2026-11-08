@@ -18,6 +18,7 @@ Each slot gets at most 2 attempts (the 2nd is simpler), then we move on.
 from __future__ import annotations
 
 import logging
+import re
 import time
 from dataclasses import dataclass
 from typing import Optional
@@ -25,7 +26,7 @@ from typing import Optional
 from . import phrases, prompts
 from .config import settings
 from .gazetteer import resolve
-from .language import LanguageTracker, detect_script_language, reply_language
+from .language import LanguageTracker, detect_script_language, judge_turn, reply_language
 from .llm import LLM
 from .models import CallState, Extraction, LocConfidence, Status, Ticket, Turn
 from .priority import assess
@@ -55,7 +56,14 @@ PROMISE_WORDS = ["minute", "hour", "soon", "on the way", "will come", "will reac
                  "मिनट", "घंटे", "जल्द", "आ जाएग", "आएंगे", "आएगी", "पहुँच",
                  "నిమిష", "గంట", "త్వరలో", "వస్తారు", "వచ్చేస్తారు",
                  # clock times ("by 5 o'clock") - numbers alone are fine ("door number 5")
-                 "o'clock", " am", " pm", "बजे", "மணிக்கு", "மணிக்குள்", "గంటలకు", "గంటల్లో"]
+                 "o'clock", "बजे", "மணிக்கு", "மணிக்குள்", "గంటలకు", "గంటల్లో"]
+# "5 pm", "10:30 am" (but not "I am here")
+CLOCK_TIME = re.compile(r"\b\d{1,2}(:\d{2})?\s?(am|pm|a\.m\.|p\.m\.)(?![a-z])")
+
+
+def sounds_like_promise(text: str) -> bool:
+    low = text.lower()
+    return any(w in low for w in PROMISE_WORDS) or bool(CLOCK_TIME.search(low))
 
 
 def check_ack(ack: Optional[str], lang: str) -> tuple[Optional[str], str]:
@@ -71,10 +79,24 @@ def check_ack(ack: Optional[str], lang: str) -> tuple[Optional[str], str]:
         return None, "question"
     if detect_script_language(a) != lang:
         return None, f"wrong language ({detect_script_language(a)})"
-    low = a.lower()
-    if any(w in low for w in PROMISE_WORDS):
+    if sounds_like_promise(a):
         return None, "sounds like a promise"
     return (a if a[-1] in ".!।" else a + ("।" if lang == "hi-IN" else ".")), "ok"
+
+
+def check_reply(reply: Optional[str], lang: str) -> tuple[Optional[str], str]:
+    """The LLM's reply to something off-script: one short sentence, in the call's language and
+    script, no promise or time. May be a question ("Yes, tell me the pin code?")."""
+    if not reply:
+        return None, "missing"
+    r = " ".join(reply.split())
+    if len(r.split()) > 14 or len(r) > 110:
+        return None, "too long"
+    if detect_script_language(r) != lang:
+        return None, f"wrong language ({detect_script_language(r)})"
+    if sounds_like_promise(r):
+        return None, "sounds like a promise"
+    return (r if r[-1] in ".!?।" else r + ("।" if lang == "hi-IN" else ".")), "ok"
 
 
 def safe_ack(ack: Optional[str], lang: str) -> Optional[str]:
@@ -83,14 +105,38 @@ def safe_ack(ack: Optional[str], lang: str) -> Optional[str]:
 
 @dataclass
 class Action:
-    kind: str                 # ask | readback | ask_correction | close | handoff
+    kind: str                 # ask | go_ahead | reply | readback | ask_correction | close | handoff
     slot: Optional[str] = None
     attempt: int = 1
     urgent_preface: bool = False
+    rephrased: bool = False   # the caller didn't understand: same question, simpler words
+    text: Optional[str] = None  # kind "reply": the checked LLM reply to speak
 
     @property
     def key(self) -> str:
         return f"ask:{self.slot}" if self.kind == "ask" else self.kind
+
+
+# "Shall I tell you?" in the four languages, in their scripts and in English letters. Checked by
+# rule because the LLM misses some wordings ("చెప్పమంటావా?" when it only knows "చెప్పనా?").
+OFFER_TO_TELL = [
+    # English
+    "shall i tell", "should i tell", "can i tell", "may i tell", "shall i say", "should i say",
+    "shall i explain", "should i explain", "do you want me to tell", "want me to tell", "let me tell",
+    # Hindi
+    "बताऊँ", "बताऊं", "बता दूँ", "बता दूं", "बतायें", "बताएँ", "बोलूँ", "बोलूं",
+    "bataun", "bataoon", "bata doon", "bata du", "bolun", "boloon",
+    # Telugu
+    "చెప్పనా", "చెప్పమంటావా", "చెప్పమంటారా", "చెప్పాలా", "చెప్పేదా", "చెప్తాను", "చెప్పొచ్చా",
+    "cheppana", "cheppamantava", "cheppamantara", "cheppala",
+    # Tamil
+    "சொல்லட்டுமா", "சொல்லவா", "சொல்லணுமா", "சொல்றேன்", "sollatuma", "sollattuma", "sollava",
+]
+
+
+def offers_to_tell(text: str) -> bool:
+    t = " ".join(text.lower().split())
+    return any(p in t for p in OFFER_TO_TELL)
 
 
 def spoken_digits(ticket_id: str) -> str:
@@ -136,6 +182,9 @@ def facts_snapshot(t: Ticket) -> str:
 def apply_extraction(t: Ticket, e: Extraction) -> None:
     loc = t.location
     location_changed = False
+    if e.pincode and loc.pincode != e.pincode:
+        loc.pincode = e.pincode
+        location_changed = True
     for field in ("locality", "street", "door_no", "building", "floor", "landmark"):
         value = getattr(e, field)
         if value:
@@ -199,6 +248,12 @@ class CallSession:
         self.questions_seen: set[str] = set()  # caller questions already answered this call
         self.last_dont_know = False            # was the previous caller turn "I don't know"
         self.last_parts: list[str] = []        # the last reply, split into its spoken parts (voice caches each)
+        self.lang_check: dict = {}             # how the last turn's language was judged (for debugging)
+        self.area_unknown = False              # caller said they don't know where they are
+        self.go_aheads = 0                     # "shall I tell you?" -> "yes, tell me" (at most twice)
+        self.replies = 0                       # LLM-written replies to off-script turns (at most 3 a call)
+        self.last_reply: Optional[str] = None  # what we said in the last such reply (context for the next turn)
+        self.asked: set[str] = set()           # question wordings already used ("area3", "street1"...)
 
     # ------------------------------------------------------------------ public
     def greeting(self) -> str:
@@ -214,21 +269,31 @@ class CallSession:
         t = self.ticket
         self.turns += 1
 
-        detected = detected_lang or detect_script_language(text)
-        call_lang = self.lang.update(detected, text)
-        reply_lang, needs_interpreter = reply_language(call_lang)
-        t.language = call_lang
-        t.needs_interpreter = t.needs_interpreter or needs_interpreter
-        self._log("caller", text, detected)
+        # The ack is written in the call's language so far (or, on the first turn, the one
+        # speech-to-text heard). If this turn switches language, a wrong-language ack is dropped.
+        tentative = self.lang.current if self.lang.locked else (detected_lang or detect_script_language(text))
 
         # Understand the reply: quick parse first, LLM only if needed
         last_key = self.last_action.key if self.last_action else None
         extraction = quick_parse(text, last_key)
         used_llm = extraction is None
         if used_llm:
-            extraction = self.llm.extract(text, self._last_question(), known_summary(t, reply_lang))
+            extraction = self.llm.extract(text, self._last_question(),
+                                          known_summary(t, reply_language(tentative)[0]))
             self.llm_calls += 1
             self.tokens += extraction.tokens_used
+
+        # Language: decided after the LLM has read the words, so a wrong speech-to-text guess
+        # (Hindi written in Tamil letters) can't switch the call on its own.
+        heard, sure = judge_turn(detected_lang, text, extraction.spoken_language, extraction.llm_failed)
+        call_lang = self.lang.update(heard, text, sure)
+        reply_lang, needs_interpreter = reply_language(call_lang)
+        t.language = call_lang
+        t.needs_interpreter = t.needs_interpreter or needs_interpreter
+        self._log("caller", text, heard)
+        self.lang_check = {"stt": detected_lang, "llm": extraction.spoken_language,
+                           "heard": heard, "sure": sure, "call": call_lang,
+                           "llm_failed": extraction.llm_failed}
         before = facts_snapshot(t)
         apply_extraction(t, extraction)
         if "rescue" not in t.needs and (t.danger.trapped or t.danger.water_level in
@@ -249,10 +314,17 @@ class CallSession:
         # "nahi galat he" says something is wrong but gives no new details.)
         self.facts_changed = facts_snapshot(t) != before
 
+        # "Shall I tell you?" with nothing else new in it: say "yes, tell me" (see _next_action).
+        if (extraction.caller_question in (None, "other") and not self.facts_changed
+                and offers_to_tell(text)):
+            extraction.caller_question = "go_ahead"
+
         # Asking us something shows the caller is engaged, but only the FIRST time:
         # "boat kab aayegi?" asked again and again is a caller who is stuck.
-        new_question = (extraction.caller_question in ANSWERABLE
+        new_question = ((extraction.caller_question in ANSWERABLE | {"rephrase", "go_ahead"} or bool(extraction.reply))
                         and extraction.caller_question not in self.questions_seen)
+        if extraction.dont_know and self.last_action and self.last_action.slot == "area":
+            self.area_unknown = True
         if extraction.caller_question:
             self.questions_seen.add(extraction.caller_question)
 
@@ -274,13 +346,20 @@ class CallSession:
 
         action = self._next_action(extraction)
         action.urgent_preface = t.escalate_to_human and not was_escalated
+        if action.kind == "ask":
+            self.asked.add(f"{action.slot}{action.attempt}")
 
         reply = self._say(action, reply_lang, extraction, used_llm, new_panic)
         if action.kind == "close":
             self._finish()
         elif action.kind == "handoff":
             self._hand_off()
-        self.last_action = action
+        if action.kind in ("go_ahead", "reply"):
+            # after "yes, tell me" the caller's answer is still to the question before it
+            self.last_reply = reply
+        else:
+            self.last_action = action
+            self.last_reply = None
         self._log("agent", reply, reply_lang)
         self.store.save(t)
 
@@ -288,6 +367,11 @@ class CallSession:
         result["turn_ms"] = round((time.perf_counter() - started) * 1000)
         result["used_llm"] = used_llm
         result["ack_status"] = self.ack_status
+        result["lang_check"] = self.lang_check
+        # what the turn was understood as (for debugging a reply that looks wrong)
+        result["understood"] = {"caller_question": extraction.caller_question, "dont_know": extraction.dont_know,
+                                "panic": extraction.panic, "unclear": extraction.unclear,
+                                "llm_failed": extraction.llm_failed}
         result["llm_calls_total"] = self.llm_calls
         result["tokens_total"] = self.tokens
         return result
@@ -312,7 +396,7 @@ class CallSession:
             return any(v is not None for v in (d.injured, d.medical_emergency, d.water_rising,
                                                 d.structure_unsafe, d.trapped)) or d.water_level is not None
         if slot == "area":
-            return loc.locality is not None and loc.lat is not None
+            return (loc.locality is not None and loc.lat is not None) or bool(loc.pincode)
         if slot == "street":
             return bool(loc.street or loc.door_no or loc.building or loc.landmark)
         if slot == "floor":
@@ -358,7 +442,37 @@ class CallSession:
         if self.turns >= settings.max_turns:
             return Action("handoff" if self.ticket.location.confidence == LocConfidence.UNKNOWN else "close")
 
+        # Something the fixed flow doesn't cover ("I only know the pin code, is that ok?"): the LLM's
+        # short reply, if it passes the checks. The caller's next answer is still to the same question.
+        if (last and last.kind == "ask" and e.reply and not self.facts_changed and self.replies < 3
+                and e.caller_question not in ANSWERABLE and e.caller_question != "rephrase"
+                and e.confirmation is None):
+            text, reason = check_reply(e.reply, reply_language(self.ticket.language)[0])
+            if text:
+                self.replies += 1
+                return Action("reply", slot=last.slot, attempt=last.attempt, text=text)
+            log.info("LLM reply not used: %s (%r)", reason, e.reply)
+
+        # "Shall I tell you?": "Yes, tell me", and wait. Their next answer is still to the same question.
+        if e.caller_question == "go_ahead" and last and last.kind == "ask" and self.go_aheads < 2:
+            self.go_aheads += 1
+            return Action("go_ahead", slot=last.slot, attempt=last.attempt)
+
+        # "What does floor mean?": the same question again, in its simpler wording (once per question).
+        if (e.caller_question == "rephrase" and last and last.kind == "ask" and not last.rephrased
+                and not self._slot_filled(last.slot) and phrases.has(f"{last.slot}{last.attempt + 1}", "en-IN")):
+            self.attempts[last.slot] += 1
+            return Action("ask", slot=last.slot, attempt=last.attempt + 1, rephrased=True)
+
         for slot in SLOT_ORDER:
+            if (slot == "street" and self.area_unknown and not self._slot_filled("area")
+                    and not self._slot_filled("street")):
+                # They don't know their area: asking for street and house number makes no sense.
+                # Ask once what they can SEE nearby (unless already asked), then move on.
+                self.attempts["street"] = self._max_attempts("street")
+                if "area3" not in self.asked:
+                    return Action("ask", slot="area", attempt=3)
+                continue
             if not self._slot_filled(slot) and self.attempts[slot] < self._max_attempts(slot):
                 self.attempts[slot] += 1
                 if self.panic and slot in SIMPLE_WHEN_PANIC:
@@ -390,6 +504,10 @@ class CallSession:
                 return phrases.say(key, lang)
             # no third wording for this question: soften the repeat instead of saying the same words cold
             return f'{phrases.say("again", lang)} {phrases.say(f"{a.slot}2", lang)}'
+        if a.kind == "go_ahead":
+            return phrases.say("go_ahead", lang)
+        if a.kind == "reply":
+            return a.text
         if a.kind == "readback":
             return phrases.say("readback", lang, details=phrases.readback_details(t, lang))
         if a.kind == "ask_correction":
@@ -407,6 +525,10 @@ class CallSession:
             parts.append(phrases.say("urgent", lang))
         elif e.caller_question in ANSWERABLE:
             self.ack_status = "skipped (answering their question instead)"
+        elif e.caller_question:
+            # they asked something ("what does floor mean?"): an ack would echo the question
+            # back as if it were an answer ("what does floor mean, understood")
+            self.ack_status = "skipped (caller asked a question)"
         elif a.kind in ("ask", "readback", "ask_correction"):
             llm_ack = None
             if used_llm:
@@ -425,6 +547,8 @@ class CallSession:
             self.calmed = True
         if e.caller_question in ANSWERABLE:
             parts.append(phrases.say(f"ans_{e.caller_question}", lang))
+        if a.rephrased:
+            parts.append(phrases.say("rephrase", lang))
         parts.append(self._line(a, lang))
         self.last_parts = parts
         return " ".join(parts)
@@ -462,12 +586,22 @@ class CallSession:
             t.followup_reasons.append(RECHECK_REASON)
         self.done = True
 
+    def question_en(self) -> Optional[str]:
+        """What we just asked, in English. The speech-to-text context: it tells Prisma what the
+        caller is answering without pushing it toward the call's language or script."""
+        a = self.last_action
+        if not a or a.kind in ("close", "handoff"):
+            return None
+        return self._line(a, "en-IN")
+
     def _last_question(self) -> Optional[str]:
         """English version of what we just asked, as context for the extractor."""
         a = self.last_action
         if not a or a.kind in ("close", "handoff"):
             return None
-        return f"{a.key}: {self._line(a, 'en-IN')}"
+        asked = f"{a.key}: {self._line(a, 'en-IN')}"
+        # after an off-script reply ("yes, tell me the pin code"), the LLM needs to know we said it
+        return f"{asked} (then the agent said: {self.last_reply})" if self.last_reply else asked
 
     def _log(self, role: str, text: str, lang: Optional[str]) -> None:
         self.ticket.transcript.append(Turn(role=role, text=text, lang=lang))

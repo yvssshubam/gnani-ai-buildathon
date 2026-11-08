@@ -167,9 +167,11 @@ def api(tmp_path, monkeypatch):
     monkeypatch.setattr(main, "llm", llm)
     monkeypatch.setattr(main, "dispatch", Dispatch(str(tmp_path / "d.db")))
     monkeypatch.setattr(main, "notes", Notes(str(tmp_path / "n.db"), FakeOnly(), main.store.get))
-    c = TestClient(main.app)
-    c.stt, c.llm = stt, llm
-    return c
+    # One event loop for the whole test, as on the real server. Without `with`, each request
+    # gets its own loop, and a note-taker started in one request can be dropped half-way.
+    with TestClient(main.app) as c:
+        c.stt, c.llm = stt, llm
+        yield c
 
 
 def test_operator_call_records_both_sides_and_fills_the_ticket(api):

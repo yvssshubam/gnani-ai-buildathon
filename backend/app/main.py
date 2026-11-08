@@ -24,13 +24,14 @@ from pydantic import BaseModel
 from . import prompts
 from .config import settings
 from .dialogue import CallSession, apply_extraction, known_summary
+from .language import judge_turn
 from .dispatch import HUMAN_OPERATORS, HUMAN_OPERATORS_BUSY, Dispatch, DispatchError, sms_text
 from .llm import make_llm
 from .models import CallState, Status, Turn
 from .notes import Notes
 from .priority import assess
 from .store import TicketStore
-from .voice.call import AUDIO_ROUTE, VoiceState, keyterms, languages_for, speak, voice_turn
+from .voice.call import AUDIO_ROUTE, VoiceState, keyterms, speak, voice_turn
 from .voice.gnani_http import GnaniError
 from .voice.stt import PrismaSTT
 from .voice.tts import TimbreTTS
@@ -334,20 +335,21 @@ async def operator_turn(call_id: str, request: Request, speaker: str = "caller",
     stt, _ = _voice_clients()
     other = "operator" if speaker == "caller" else "caller"
     try:
-        tr = await stt.transcribe(audio, filename=filename, previous_text=_last_line(t, other),
-                                  keyterms=keyterms(t.language), languages=languages_for(t.language))
+        tr = await stt.transcribe(audio, filename=filename, previous_text=_last_line(t, other))
     except GnaniError as e:
         raise HTTPException(502, f"Speech recognition failed: {e}")
     if not tr.text:
         return {"heard": "", "heard_lang": tr.language, "stt_ms": round(tr.seconds * 1000), "ticket": t.model_dump()}
 
-    t.transcript.append(Turn(role=speaker, text=tr.text, lang=tr.language))
+    turn = Turn(role=speaker, text=tr.text, lang=tr.language)
+    t.transcript.append(turn)
     if speaker == "caller":
-        if tr.language:
-            t.language = tr.language
         asked = _last_line(t, "operator")
         e = await run_in_threadpool(llm.extract, tr.text, f"operator: {asked}" if asked else None,
                                     known_summary(t, t.language))
+        heard, _ = judge_turn(tr.language, tr.text, e.spoken_language, e.llm_failed)
+        if heard:
+            turn.lang = t.language = heard
         apply_extraction(t, e)
         if "rescue" not in t.needs and (t.danger.trapped or t.danger.water_level in ("knee", "waist", "chest", "neck", "roof")):
             t.needs.append("rescue")

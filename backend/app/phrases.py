@@ -29,6 +29,8 @@ PHRASES: dict[str, dict[str, str]] = {
         "area2": "Just tell me the area name, or any big temple, school or bus stop near you.",
         "area3": "Can you see a temple, school, water tank or tall building near you? Tell me its name.",
         "again": "Take your time.",
+        "rephrase": "Let me ask that more simply.",
+        "go_ahead": "Yes, please tell me.",
         "street1": "Which street, and what is the house number or building name? Which floor are you on?",
         "street2": "Is there any big temple, school, church or shop near your house?",
         "floor1": "Which floor are you on?",
@@ -47,7 +49,7 @@ PHRASES: dict[str, dict[str, str]] = {
         # read-back pieces
         "people": "{n} people", "person": "1 person", "including": "including {list}",
         "at": "at {address}", "near": "near {landmark}", "door": "door number {x}",
-        "floor_n": "{n} floor", "ground": "ground floor", "terrace": "terrace",
+        "floor_n": "{n} floor", "ground": "ground floor", "terrace": "terrace", "pin": "pin code {x}",
         "none": "no details yet", "sep": ", ",
     },
     "ta-IN": {
@@ -65,6 +67,8 @@ PHRASES: dict[str, dict[str, str]] = {
         "area2": "ஏரியா பேர் மட்டும் சொல்லுங்க, இல்ல பக்கத்துல ஏதாவது பெரிய கோவில், ஸ்கூல், பஸ் ஸ்டாப்?",
         "area3": "பக்கத்துல ஏதாவது கோவில், ஸ்கூல், தண்ணீர் தொட்டி இல்ல பெரிய கட்டடம் தெரியுதா? அதோட பேர் சொல்லுங்க.",
         "again": "நிதானமா சொல்லுங்க.",
+        "rephrase": "சுலபமா மறுபடியும் கேக்கறேன்.",
+        "go_ahead": "சரி, சொல்லுங்க.",
         "street1": "எந்த தெரு, வீட்டு நம்பர் இல்ல அபார்ட்மெண்ட் பேர் என்ன? எந்த மாடியில இருக்கீங்க?",
         "street2": "வீட்டு பக்கத்துல ஏதாவது பெரிய கோவில், ஸ்கூல், சர்ச் இல்ல கடை இருக்கா?",
         "floor1": "எந்த மாடியில இருக்கீங்க?",
@@ -82,7 +86,7 @@ PHRASES: dict[str, dict[str, str]] = {
         "urgent": "உங்க நிலைமை மிக அவசரம்னு குறிச்சிருக்கோம், மீட்பு அதிகாரிக்கு இப்பவே தகவல் போயிடுச்சு.",
         "people": "{n} பேர்", "person": "1 பேர்", "including": "{list} உட்பட",
         "at": "{address}", "near": "{landmark} பக்கத்துல", "door": "கதவு எண் {x}",
-        "floor_n": "{n}வது மாடி", "ground": "தரை தளம்", "terrace": "மொட்டை மாடி",
+        "floor_n": "{n}வது மாடி", "ground": "தரை தளம்", "terrace": "மொட்டை மாடி", "pin": "பின் கோடு {x}",
         "none": "இன்னும் விவரம் இல்ல", "sep": ", ",
     },
     "hi-IN": {
@@ -100,6 +104,8 @@ PHRASES: dict[str, dict[str, str]] = {
         "area2": "बस इलाके का नाम बताइए, या पास का कोई बड़ा मंदिर, स्कूल या बस स्टॉप।",
         "area3": "आपके पास कोई मंदिर, स्कूल, पानी की टंकी या ऊँची इमारत दिखती है? उसका नाम बताइए।",
         "again": "आराम से बताइए।",
+        "rephrase": "आसान शब्दों में फिर से पूछते हैं।",
+        "go_ahead": "हाँ, बताइए।",
         "street1": "कौन सी गली, और मकान नंबर या बिल्डिंग का नाम क्या है? आप किस मंज़िल पर हैं?",
         "street2": "घर के पास कोई बड़ा मंदिर, स्कूल, चर्च या दुकान है?",
         "floor1": "आप किस मंज़िल पर हैं?",
@@ -117,7 +123,7 @@ PHRASES: dict[str, dict[str, str]] = {
         "urgent": "आपका मामला सबसे ज़रूरी माना गया है, बचाव अधिकारी को अभी सूचना दी जा रही है।",
         "people": "{n} लोग", "person": "1 व्यक्ति", "including": "{list} समेत",
         "at": "{address}", "near": "{landmark} के पास", "door": "मकान नंबर {x}",
-        "floor_n": "{n} मंज़िल", "ground": "ग्राउंड फ़्लोर", "terrace": "छत",
+        "floor_n": "{n} मंज़िल", "ground": "ग्राउंड फ़्लोर", "terrace": "छत", "pin": "पिन कोड {x}",
         "none": "अभी कोई जानकारी नहीं", "sep": ", ",
     },
     "te-IN": {
@@ -135,6 +141,8 @@ PHRASES: dict[str, dict[str, str]] = {
         "area2": "ఏరియా పేరు మాత్రం చెప్పండి, లేదా దగ్గర్లో ఏదైనా పెద్ద గుడి, స్కూల్, బస్ స్టాప్?",
         "area3": "మీ దగ్గర్లో ఏదైనా గుడి, స్కూల్, నీళ్ళ ట్యాంక్ లేదా పెద్ద బిల్డింగ్ కనిపిస్తుందా? దాని పేరు చెప్పండి.",
         "again": "నెమ్మదిగా చెప్పండి.",
+        "rephrase": "సులభంగా మళ్ళీ అడుగుతాను.",
+        "go_ahead": "అవును, చెప్పండి.",
         "street1": "ఏ వీధి, ఇంటి నంబర్ లేదా బిల్డింగ్ పేరు ఏంటి? మీరు ఏ అంతస్తులో ఉన్నారు?",
         "street2": "మీ ఇంటి దగ్గర ఏదైనా పెద్ద గుడి, స్కూల్, చర్చి లేదా షాప్ ఉందా?",
         "floor1": "మీరు ఏ అంతస్తులో ఉన్నారు?",
@@ -152,7 +160,7 @@ PHRASES: dict[str, dict[str, str]] = {
         "urgent": "మీ పరిస్థితిని అత్యంత అత్యవసరంగా గుర్తించాము, రెస్క్యూ అధికారికి ఇప్పుడే సమాచారం పంపుతున్నాము.",
         "people": "{n} మంది", "person": "1 వ్యక్తి", "including": "{list} తో సహా",
         "at": "{address}", "near": "{landmark} దగ్గర", "door": "ఇంటి నంబర్ {x}",
-        "floor_n": "{n}వ అంతస్తు", "ground": "గ్రౌండ్ ఫ్లోర్", "terrace": "టెర్రస్",
+        "floor_n": "{n}వ అంతస్తు", "ground": "గ్రౌండ్ ఫ్లోర్", "terrace": "టెర్రస్", "pin": "పిన్ కోడ్ {x}",
         "none": "ఇంకా వివరాలు లేవు", "sep": ", ",
     },
 }
@@ -235,6 +243,8 @@ def readback_details(t, lang: str) -> str:
         (loc.building_native if native and loc.building_native else loc.building),
         (loc.street_native if native and loc.street_native else loc.street),
         native_name(loc.locality, lang),
+        # digits one by one, so the voice reads "6 0 0 0 4 2", not "six lakh..."
+        p["pin"].format(x=" ".join(loc.pincode)) if getattr(loc, "pincode", None) else None,
         floor_text(loc.floor, lang),
     ]
     addr_text = p["sep"].join(a for a in addr if a)

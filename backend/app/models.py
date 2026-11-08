@@ -46,6 +46,7 @@ class Location(BaseModel):
     building: Optional[str] = None
     floor: Optional[str] = None
     landmark: Optional[str] = None
+    pincode: Optional[str] = None   # 6-digit postal code: narrows the area when the caller knows no names
     # Names as the caller said them, in their script (for the read-back)
     street_native: Optional[str] = None
     building_native: Optional[str] = None
@@ -133,7 +134,15 @@ class Extraction(BaseModel):
 
     # Empathy signals (same LLM call, no extra request)
     ack: Optional[str] = None             # <= 6-word acknowledgement in the caller's language
-    caller_question: Optional[str] = None  # when_help | stay_or_move | electricity | animal | other
+    caller_question: Optional[str] = None  # when_help | stay_or_move | electricity | animal | rephrase | go_ahead | other
     panic: Optional[str] = None            # low | high
+    # Language of the caller's words, judged from the words, not the script: Hindi speech that
+    # speech-to-text wrote in Tamil letters is still "hi-IN". Normalised to our codes.
+    spoken_language: Optional[str] = None
+    pincode: Optional[str] = None
+    # A short reply the LLM suggests when the caller said something the fixed flow doesn't cover
+    # ("I only know the pin code, is that ok?" -> "Yes, tell me the pin code."). Used only after checks.
+    reply: Optional[str] = None
+    llm_failed: bool = False   # the extractor couldn't be reached or gave no usable answer
 
     tokens_used: int = 0                # LLM tokens spent on this extraction (0 = quick parse / fake)

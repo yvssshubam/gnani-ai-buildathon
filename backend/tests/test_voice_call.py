@@ -81,12 +81,24 @@ def test_turn_runs_the_dialogue_and_speaks_each_part(api):
     assert api.stt.contexts[0] is None
 
 
-def test_next_turn_gets_the_agent_question_as_context(api):
+def test_next_turn_gets_the_agent_question_in_english_as_context(api):
     call = start(api)
     api.stt.queue += [("हम वेलाचेरी में हैं", "hi-IN"), ("चार लोग", "hi-IN")]
     first = api.post(f"/api/voice/calls/{call['call_id']}/turn", content=b"a").json()
+    asked_en = main.sessions[call["call_id"]].question_en()
     api.post(f"/api/voice/calls/{call['call_id']}/turn", content=b"b")
-    assert api.stt.contexts[1] == first["reply"]
+    assert first["reply_lang"] == "hi-IN"
+    # the same question, but in English: context that doesn't push Prisma toward one script
+    assert api.stt.contexts[1] == asked_en and asked_en.isascii()
+
+
+def test_stt_context_can_be_turned_off(api, monkeypatch):
+    monkeypatch.setattr(main.settings, "stt_context", "none")
+    call = start(api)
+    api.stt.queue += [("हम वेलाचेरी में हैं", "hi-IN"), ("चार लोग", "hi-IN")]
+    api.post(f"/api/voice/calls/{call['call_id']}/turn", content=b"a")
+    api.post(f"/api/voice/calls/{call['call_id']}/turn", content=b"b")
+    assert api.stt.contexts == [None, None]
 
 
 def test_silence_asks_again_without_using_a_turn(api):
@@ -133,10 +145,10 @@ def test_fixed_lines_are_complete_sentences_only():
     assert phrases.PHRASES["hi-IN"]["sep"] not in texts and phrases.PHRASES["hi-IN"]["ground"] not in texts
 
 
-def test_keyterms_are_english_spellings_until_the_call_language_is_known():
+def test_keyterms_are_english_spellings_only():
     terms = keyterms()
     assert "Velachery" in terms and "வேளச்சேரி" not in terms and len(terms) <= 200
-    assert "வேளச்சேரி" in keyterms("ta-IN")
+    assert all(t.isascii() for t in terms)
 
 
 def test_simulated_caller_line_uses_a_caller_voice(api, monkeypatch, tmp_path):
@@ -157,18 +169,25 @@ def test_simulated_caller_line_uses_a_caller_voice(api, monkeypatch, tmp_path):
     assert api.post("/api/voice/say", json={"text": " ", "lang": "hi-IN"}).status_code == 400
 
 
-def test_tamil_place_names_are_only_sent_once_the_call_is_in_tamil(api):
-    from app.voice.call import keyterms, languages_for
-    assert all(t.isascii() for t in keyterms()) and "Velachery" in keyterms()
-    assert "வேளச்சேரி" in keyterms("ta-IN") and all(t.isascii() for t in keyterms("hi-IN"))
-    assert languages_for(None).split(",")[0] == main.settings.stt_languages.split(",")[0]
-    assert languages_for("ta-IN").startswith("ta-IN,") and languages_for("ta-IN").count("ta-IN") == 1
-
+def test_requests_to_prisma_dont_change_with_the_call_language(api):
+    """Shaping the request by the call's language made one wrong guess stick (Hindi in Tamil letters)."""
     call = start(api)
     api.stt.queue += [("हमारे घर में पानी भर गया है, हम वेलाचेरी में हैं", "hi-IN"), ("चार लोग", "hi-IN")]
     api.post(f"/api/voice/calls/{call['call_id']}/turn", content=b"a")
     api.post(f"/api/voice/calls/{call['call_id']}/turn", content=b"b")
-    first, second = api.stt.hints
-    assert all(t.isascii() for t in first["keyterms"])            # language not known yet: no Tamil names
-    assert second["languages"].startswith("hi-IN")                 # the call is Hindi: Hindi first
-    assert all(t.isascii() for t in second["keyterms"])
+    assert main.sessions[call["call_id"]].ticket.language == "hi-IN"
+    assert api.stt.hints == [{}, {}]       # no per-call hints or place names: Prisma's defaults every turn
+
+
+
+def test_hindi_written_in_tamil_letters_is_answered_in_hindi_with_the_hindi_voice(api, monkeypatch):
+    class HindiLLM:
+        def extract(self, text, last_question, known):
+            return Extraction(locality="Velachery", spoken_language="hi-IN", ack="ठीक है")
+    monkeypatch.setattr(main, "llm", HindiLLM())
+    call = start(api)
+    api.spoken.clear()
+    api.stt.queue.append(("பச்சாவோ பச்சாவோ முஜே பச்சாவோ ப்ளீஸ்", "ta-IN"))
+    res = api.post(f"/api/voice/calls/{call['call_id']}/turn", content=b"a").json()
+    assert res["reply_lang"] == "hi-IN" and res["lang_check"]["heard"] == "hi-IN"
+    assert api.spoken and all(lang == "hi-IN" for _, lang in api.spoken)   # Yashvi, not the Tamil voice
