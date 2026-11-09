@@ -28,6 +28,22 @@ class Settings:
     llm_reasoning_effort: str = os.getenv("LLM_REASONING_EFFORT", "").strip()
     # Reasoning tokens count toward this limit, so keep it generous.
     llm_max_tokens: int = int(os.getenv("LLM_MAX_TOKENS", "1024"))
+    # The per-turn extract. Groq counts prompt + max_tokens against the tokens-per-minute limit
+    # (8,000 on the free tier for gpt-oss), so a smaller allowance means more turns a minute.
+    llm_extract_max_tokens: int = int(os.getenv("LLM_EXTRACT_MAX_TOKENS", "500"))
+    # Free tier: Groq's limits are per model. Call notes and the demo's simulated caller run on a
+    # second model, so the live extract keeps its model's 8,000 tokens a minute to itself.
+    notes_llm_model: str = os.getenv("NOTES_LLM_MODEL", "openai/gpt-oss-120b")
+    # Background call notes run at most this often per call, leaving the rate limit to live calls.
+    notes_min_gap_seconds: float = float(os.getenv("NOTES_MIN_GAP_SECONDS", "20"))
+    # Notes write a summary and translate every caller line: the model needs room (its reasoning counts too)
+    notes_max_tokens: int = int(os.getenv("NOTES_MAX_TOKENS", "3000"))
+    # An area not on our map list ("Sainikpuri", a PIN code) is placed with OpenStreetMap's free
+    # address search (Nominatim: at most one request a second, no key). GEOCODE_ENABLED=0 turns it off.
+    geocode_enabled: bool = os.getenv("GEOCODE_ENABLED", "1").strip() not in ("0", "false", "no", "")
+    geocode_url: str = os.getenv("GEOCODE_URL", "https://nominatim.openstreetmap.org/search")
+    geocode_user_agent: str = os.getenv("GEOCODE_USER_AGENT", "Surgeline-flood-SOS-demo/1.0")
+    geocode_timeout: float = float(os.getenv("GEOCODE_TIMEOUT_SECONDS", "6"))
 
     supported_reply_langs: list[str] = [
         x.strip() for x in os.getenv("SUPPORTED_REPLY_LANGS", "ta-IN,en-IN,hi-IN,te-IN").split(",") if x.strip()

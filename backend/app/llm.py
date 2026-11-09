@@ -115,19 +115,40 @@ def clean_extraction(raw: dict) -> Extraction:
 
 
 def _retry_after(r: httpx.Response, default: float) -> float:
+    """Seconds Groq asks us to wait: the retry-after header, or "Please try again in 1.7475s" in the body."""
     try:
-        return max(0.0, float(r.headers.get("retry-after", default)))
+        if r.headers.get("retry-after"):
+            return max(0.0, float(r.headers["retry-after"]))
     except ValueError:
-        return default
+        pass
+    m = re.search(r"try again in ([\d.]+)(ms|s)", r.text or "")
+    if m:
+        value = float(m.group(1))
+        return value / 1000 if m.group(2) == "ms" else value
+    return default
+
+
+def _json_from_text(text: str) -> dict:
+    """The JSON object in a plain-text reply (used when JSON mode itself failed)."""
+    start, end = text.find("{"), text.rfind("}")
+    if start < 0 or end <= start:
+        raise ValueError("no JSON object in the reply")
+    return json.loads(text[start:end + 1])
+
+
+def _json_mode_failed(err: Exception) -> bool:
+    """Groq's 400 json_validate_failed: the model wrote no valid JSON (often nothing at all)."""
+    return isinstance(err, httpx.HTTPStatusError) and err.response.status_code == 400 \
+        and "json_validate_failed" in (err.response.text or "")
 
 
 def _retry_wait(err: Exception) -> Optional[float]:
     """Seconds to wait before one retry of the live extract, or None if retrying won't help.
-    A caller is waiting, so the wait is capped at 1.5 s, and a timeout (already 8 s) isn't retried."""
+    A caller is waiting, so the wait is capped at 4 s, and a timeout (already 8 s) isn't retried."""
     if isinstance(err, httpx.HTTPStatusError):
         status = err.response.status_code
         if status == 429:
-            return min(1.5, _retry_after(err.response, default=1.0))
+            return min(4.0, _retry_after(err.response, default=1.0) + 0.2)
         return 0.3 if status >= 500 or status == 400 else None   # 400: Groq's json_validate_failed
     if isinstance(err, ValueError):   # empty content, or JSON that didn't parse
         return 0.0
@@ -146,11 +167,16 @@ class OpenAICompatLLM:
         # After a 429, background work (notes) waits until this time so the live call gets the quota.
         self.cooldown_until = 0.0
 
-    def _chat(self, messages: list[dict], json_mode: bool) -> tuple[str, int]:
-        body = {"model": settings.llm_model, "messages": messages, "temperature": 0.2,
-                "max_tokens": settings.llm_max_tokens}
-        if settings.llm_reasoning_effort:
-            body["reasoning_effort"] = settings.llm_reasoning_effort
+    def _chat(self, messages: list[dict], json_mode: bool, max_tokens: Optional[int] = None,
+              model: Optional[str] = None) -> tuple[str, int]:
+        model = model or settings.llm_model
+        body = {"model": model, "messages": messages, "temperature": 0.2,
+                "max_tokens": max_tokens or settings.llm_max_tokens}
+        effort = settings.llm_reasoning_effort or ("low" if "gpt-oss" in model else "")
+        if effort:
+            # gpt-oss reasons before it answers; on "medium" it can spend the whole allowance
+            # thinking and write nothing (Groq then fails JSON mode with an empty generation)
+            body["reasoning_effort"] = effort
         if json_mode:
             body["response_format"] = {"type": "json_object"}
         t0 = time.perf_counter()
@@ -174,13 +200,16 @@ class OpenAICompatLLM:
             {"role": "system", "content": prompts.EXTRACT_SYSTEM},
             {"role": "user", "content": prompts.extract_user_prompt(utterance, last_question, known_summary)},
         ]
+        json_mode = True
         for attempt in (1, 2):
             try:
-                out, tokens = self._chat(messages, json_mode=True)
-                e = clean_extraction(json.loads(out))
+                out, tokens = self._chat(messages, json_mode=json_mode, max_tokens=settings.llm_extract_max_tokens)
+                e = clean_extraction(json.loads(out) if json_mode else _json_from_text(out))
                 e.tokens_used = tokens
                 return e
             except Exception as err:  # network error, bad JSON, rate limit...
+                if _json_mode_failed(err):
+                    json_mode = False      # retry as plain text and pull the JSON out of it
                 wait = _retry_wait(err)
                 if attempt == 1 and wait is not None:
                     log.warning("extract failed, retrying in %.1f s: %s", wait, err)
@@ -190,14 +219,18 @@ class OpenAICompatLLM:
                 return Extraction(unclear=True, llm_failed=True)
         return Extraction(unclear=True, llm_failed=True)
 
-    def chat_json(self, system: str, user: str) -> tuple[dict, int]:
+    def chat_json(self, system: str, user: str, model: Optional[str] = None,
+                  max_tokens: Optional[int] = None) -> tuple[dict, int]:
         """Any small JSON job (call notes, the notes check). Raises on failure: callers fall back."""
-        out, tokens = self._chat([{"role": "system", "content": system}, {"role": "user", "content": user}], json_mode=True)
+        out, tokens = self._chat([{"role": "system", "content": system}, {"role": "user", "content": user}],
+                                 json_mode=True, model=model, max_tokens=max_tokens)
         return json.loads(out), tokens
 
-    def chat_text(self, system: str, user: str) -> str:
-        """Any small text job (the simulated caller). Raises on failure."""
-        out, _ = self._chat([{"role": "system", "content": system}, {"role": "user", "content": user}], json_mode=False)
+    def chat_text(self, system: str, user: str, model: Optional[str] = None, max_tokens: Optional[int] = None) -> str:
+        """Any small text job (the simulated caller). Raises on failure. `model` picks another model,
+        which on Groq has its own rate limit (the stress test's caller uses that)."""
+        out, _ = self._chat([{"role": "system", "content": system}, {"role": "user", "content": user}],
+                            json_mode=False, model=model, max_tokens=max_tokens)
         return out.strip().strip('"')
 
     def phrase(self, instruction, lang, utterance, fallback_text) -> str:
@@ -327,10 +360,10 @@ class FakeLLM:
     def phrase(self, instruction, lang, utterance, fallback_text) -> str:
         return fallback_text
 
-    def chat_json(self, system: str, user: str) -> tuple[dict, int]:
+    def chat_json(self, system: str, user: str, **kw) -> tuple[dict, int]:
         raise NotImplementedError("the offline fake LLM has no free-form jobs; callers use their rule-based fallback")
 
-    def chat_text(self, system: str, user: str) -> str:
+    def chat_text(self, system: str, user: str, **kw) -> str:
         raise NotImplementedError("the offline fake LLM has no free-form jobs; callers use their rule-based fallback")
 
 

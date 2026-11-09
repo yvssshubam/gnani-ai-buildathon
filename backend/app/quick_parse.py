@@ -49,7 +49,9 @@ YES = ["yes", "yeah", "yep", "correct", "right", "ok", "okay", "sari", "aama", "
        "haa", "ha", "haanji", "hanji", "ji", "sahi", "theek", "thik", "bilkul", "seri", "aamam", "avunu", "sare",
        "ஆமா", "ஆமாம்", "சரி", "கரெக்ட்", "ஆம்",
        "हाँ", "हां", "जी", "सही", "जी हाँ", "हा",
-       "అవును", "సరే", "కరెక్ట్", "ఔను"]
+       "అవును", "సరే", "కరెక్ట్", "ఔను",
+       # "all correct" forms ("అవును, అంతా కరెక్టే", "हाँ, सब ठीक है")
+       "కరెక్టే", "కరెక్టు", "correctే", "ठीक", "बिलकुल", "बिल्कुल", "சரியா", "கரெக்டு"]
 NO = ["no", "nope", "wrong", "illa", "nahi",
       "nahin", "nhi", "nai", "na", "galat", "illai", "thappu", "ledu", "kaadu", "tappu",
       "இல்ல", "இல்லை", "தப்பு", "இல்லீங்க",
@@ -64,8 +66,8 @@ DONT_KNOW = ["don't know", "dont know", "not sure", "no idea", "theriyala", "pat
              "తెలియదు", "తెలీదు", "గుర్తు లేదు"]
 
 WATER = {
-    "ankle": ["ankle", "கணுக்கால்", "टखने", "टखना", "చీలమండ", "takhne", "takhna", "takhno", "kanukkal"],
-    "knee": ["knee", "முட்டி", "முழங்கால்", "घुटने", "घुटना", "మోకాలి", "మోకాలు", "మోకాళ్ళ",
+    "ankle": ["ankle", "கணுக்கால்", "टखने", "टखना", "टखनों", "చీలమండ", "takhne", "takhna", "takhno", "kanukkal"],
+    "knee": ["knee", "knees", "முட்டி", "முழங்கால்", "घुटने", "घुटना", "घुटनों", "మోకాలి", "మోకాలు", "మోకాళ్ళ",
              "ghutne", "ghutna", "ghutno", "mutti", "muttu", "mokalu", "mokaali", "mokalla"],
     "waist": ["waist", "hip", "இடுப்பு", "कमर", "నడుము", "kamar", "iduppu", "idupu", "nadumu"],
     "chest": ["chest", "நெஞ்சு", "மார்பு", "छाती", "ఛాతీ", "chhati", "chati", "chaati", "nenju"],
@@ -108,7 +110,10 @@ DANGER_NONE = ["koi nahi", "kisi ko nahi", "koi ghayal nahi", "nobody", "no one"
                "ఎవరికీ లేదు"]
 
 # words that may sit next to a plain yes/no at a read-back ("haan sahi hai", "nahi galat he")
-ANSWER_FILLER = {"hai", "he", "है", "ji", "जी", "bilkul", "बिल्कुल", "sir", "madam", "ஆமாங்க", "சரிங்க", "అండి"}
+ANSWER_FILLER = {"hai", "he", "है", "ji", "जी", "bilkul", "बिल्कुल", "sir", "madam", "ஆமாங்க", "சரிங்க", "అండి",
+                 # "all" / "everything" ("haan sab sahi hai", "అవును, అంతా కరెక్టే", "yes, all correct")
+                 "sab", "सब", "kuch", "कुछ", "all", "everything", "is", "it's", "that's", "అంతా", "అన్నీ",
+                 "எல்லாம்", "ellam", "antha", "anta"}
 
 
 def _has(t: str, w: str) -> bool:

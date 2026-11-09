@@ -7,6 +7,8 @@ The Telugu and Tamil phrases are drafts and need a native speaker's check.
 """
 from __future__ import annotations
 
+import re
+
 REQUEST_HUMAN = "request_human"   # "let me talk to a person"
 REFUSE_AI = "refuse_ai"           # "I won't talk to a machine"
 ASK_ROBOT = "ask_robot"           # "are you a robot?"
@@ -58,10 +60,18 @@ PATTERNS: dict[str, list[str]] = {
 }
 
 
+# "మీరు robot?", "आप robot?", "you are a machine?": a robot word asked as a question, or said to "you",
+# in any mix of languages (speech-to-text often writes "robot" in English letters)
+ROBOT_WORD = re.compile(r"robot|रोबोट|రోబో|ரோபோ|machine|मशीन|మెషిన్|மெஷின்")
+YOU_WORD = re.compile(r"\b(?:you|aap|meeru|neenga)\b|आप|तुम|మీరు|నువ్వు|நீங்க|நீ\b")
+
+
 def detect(text: str) -> set[str]:
     """All intents whose phrases appear in the text."""
     t = " ".join((text or "").lower().split())
     found = {intent for intent, phrases in PATTERNS.items() if any(p in t for p in phrases)}
+    if ROBOT_WORD.search(t) and ("?" in t or YOU_WORD.search(t)) and REFUSE_AI not in found:
+        found.add(ASK_ROBOT)
     if REFUSE_AI in found:
         found.discard(REQUEST_HUMAN)   # refusing the machine already means "a human, please"
     return found

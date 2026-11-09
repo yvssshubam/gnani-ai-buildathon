@@ -144,3 +144,23 @@ def test_if_the_llm_fails_prisma_tag_matching_the_letters_still_switches():
 
 def test_quick_parsed_short_replies_still_need_two_in_a_row():
     assert judge_turn("hi-IN", "नहीं", None) == ("hi-IN", False)
+
+
+# ---------------------------------------------------------------- a breaking-up line
+
+class _UnclearLLM:
+    """Speech-to-text turned a cracking Hindi line into short English words: nothing usable."""
+    def extract(self, text, last_question, known):
+        if text in ("Hello.", "Can I do?"):
+            return Extraction(unclear=True, spoken_language="en-IN")
+        return Extraction(spoken_language="hi-IN", injured=False)
+
+
+def test_misheard_noise_never_switches_the_call_to_english():
+    s = CallSession(Ticket(id="5941", caller_number="x"), _UnclearLLM(), _Store())
+    s.greeting()
+    s.handle("किसी को चोट नहीं लगी है, बस पानी बढ़ रहा है", "hi-IN")
+    for heard in ("Hello.", "Can I do?"):
+        r = s.handle(heard, "en-IN")
+        assert s.ticket.language == "hi-IN"
+        assert r["reply_lang"] == "hi-IN"

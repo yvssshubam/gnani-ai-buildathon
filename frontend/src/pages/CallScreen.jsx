@@ -3,14 +3,17 @@ import PriorityTag from "../components/PriorityTag.jsx";
 import { Conversation, LiveTicket, Speaking } from "../components/LiveCall.jsx";
 import { LANGUAGE } from "../lib/format.js";
 import { SCENARIOS } from "../lib/scenarios.js";
+import { TEST_CALLS } from "../lib/testCalls.js";
 import { mmss, useVoiceCall } from "../lib/useVoiceCall.js";
+
+const CALLERS = [...TEST_CALLS, ...SCENARIOS];   // your test calls first, then the other simulated callers
 
 /** The demo call screen: the caller's phone on the left, the ticket filling in on the right. */
 export default function CallScreen() {
   const call = useVoiceCall();
-  const [scenarioId, setScenarioId] = useState(SCENARIOS[0].id);
+  const [scenarioId, setScenarioId] = useState(CALLERS[0].id);
   const [timings, setTimings] = useState(false);
-  const scenario = SCENARIOS.find((s) => s.id === scenarioId);
+  const scenario = CALLERS.find((s) => s.id === scenarioId);
   const t = call.ticket;
 
   return (
@@ -47,7 +50,7 @@ export default function CallScreen() {
                 <button type="button" className="end-btn" onClick={call.hangUp}>End</button>
               </div>
             ) : (
-              <StartCall scenarioId={scenarioId} setScenarioId={setScenarioId} scenario={scenario}
+              <StartCall scenarios={CALLERS} scenarioId={scenarioId} setScenarioId={setScenarioId} scenario={scenario}
                 onMic={() => call.start({ mode: "mic" })} onSim={() => call.start({ mode: "sim", scenario })}
                 again={call.phase === "ended"} />
             )}
@@ -72,7 +75,7 @@ export default function CallScreen() {
 }
 
 /** Start a real microphone call, or a simulated caller from a script. */
-export function StartCall({ scenarioId, setScenarioId, scenario, onMic, onSim, onOperator, again, compact }) {
+export function StartCall({ scenarios = SCENARIOS, scenarioId, setScenarioId, scenario, onMic, onSim, onOperator, again, compact }) {
   return (
     <div className={`start-call${compact ? " compact" : ""}`}>
       <div className="start-row">
@@ -81,7 +84,7 @@ export function StartCall({ scenarioId, setScenarioId, scenario, onMic, onSim, o
       <div className="start-row sim">
         <label className="sr-only" htmlFor="scenario">Simulated caller</label>
         <select id="scenario" value={scenarioId} onChange={(e) => setScenarioId(e.target.value)}>
-          {SCENARIOS.map((s) => <option key={s.id} value={s.id}>{s.name}</option>)}
+          {scenarios.map((s) => <option key={s.id} value={s.id}>{s.name}</option>)}
         </select>
         <button type="button" className="btn" onClick={onSim}>Simulate call</button>
       </div>

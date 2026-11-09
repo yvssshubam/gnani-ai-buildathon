@@ -26,6 +26,7 @@ from typing import Callable, Optional
 
 from starlette.concurrency import run_in_threadpool
 
+from .config import settings
 from .language import LANG_NAMES
 
 log = logging.getLogger("notes")
@@ -136,6 +137,7 @@ class Notes:
             operator_notes TEXT DEFAULT '', check_items TEXT, checked_at REAL, updated_at REAL)""")
         self._db.commit()
         self._running: set[str] = set()
+        self._last_run: dict[str, float] = {}     # ticket -> when its notes last started
         self._dirty: set[str] = set()
         self._tasks: set[asyncio.Task] = set()
 
@@ -188,10 +190,13 @@ class Notes:
         self._running.add(ticket_id)
         try:
             while True:
-                # The LLM is rate limited: let the live call have the quota, then write the notes.
-                wait = getattr(self.llm, "cooldown_until", 0.0) - time.time()
+                # At most every NOTES_MIN_GAP_SECONDS per call, and never while the LLM is rate
+                # limited: the live call's extract gets the quota first.
+                gap = settings.notes_min_gap_seconds - (time.time() - self._last_run.get(ticket_id, 0.0))
+                wait = max(gap, getattr(self.llm, "cooldown_until", 0.0) - time.time())
                 if wait > 0:
                     await asyncio.sleep(min(wait, 30.0))
+                self._last_run[ticket_id] = time.time()
                 self._dirty.discard(ticket_id)
                 await run_in_threadpool(self.update_now, ticket_id)
                 if ticket_id not in self._dirty:
@@ -212,7 +217,8 @@ class Notes:
                         if role in ("caller", "operator") and str(i) not in cur["translations"]
                         and (lang or "") != "en-IN" and text.strip()]
         try:
-            out, _ = self.llm.chat_json(NOTES_SYSTEM, self._notes_prompt(t, lines, to_translate, cur))
+            out, _ = self.llm.chat_json(NOTES_SYSTEM, self._notes_prompt(t, lines, to_translate, cur),
+                                        model=settings.notes_llm_model, max_tokens=settings.notes_max_tokens)
             summary = str(out.get("summary") or "").strip() or fallback_summary(t)
             details = []
             for d in out.get("details") or []:
@@ -255,7 +261,8 @@ class Notes:
         body = "\n".join(f"{at} {_role_name(role)}: {text}" for _, at, role, text, _ in lines[-60:])
         try:
             out, _ = self.llm.chat_json(CHECK_SYSTEM, f"Ticket fields (may be incomplete): {ticket_facts(t)}\n"
-                                                      f"Transcript:\n{body}\n\nOperator's notes:\n{operator_notes or '(empty)'}")
+                                                      f"Transcript:\n{body}\n\nOperator's notes:\n{operator_notes or '(empty)'}",
+                                        model=settings.notes_llm_model)
             items = clean_check_items(out.get("items"), {text for _, _, _, text, _ in lines})
         except NotImplementedError:
             items = rule_check(t, operator_notes)
@@ -277,7 +284,7 @@ class Notes:
         body = "\n".join(f"{_role_name(role)}: {text}" for _, _, role, text, _ in transcript_lines(t)[-20:]) or "(the call just connected)"
         try:
             reply = self.llm.chat_text(SIM_CALLER_SYSTEM.format(facts=facts, lang_name=lang_name, script_note=script_note),
-                                       f"The call so far:\n{body}\n\nYour reply:")
+                                       f"The call so far:\n{body}\n\nYour reply:", model=settings.notes_llm_model)
         except NotImplementedError:
             return None
         except Exception as e:

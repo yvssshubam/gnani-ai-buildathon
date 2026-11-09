@@ -3,6 +3,8 @@ import { api } from "./api.js";
 import { LANGUAGE, VULNERABLE, WATER_TEXT, floorLabel } from "./format.js";
 import { Recorder, playAll } from "./recorder.js";
 import { scriptReader } from "./scenarios.js";
+import { roughen } from "./lineAudio.js";
+import { lineReader } from "./testCalls.js";
 
 const RING_MS = 1800;
 const SIM_PAUSE_MS = 700;   // the simulated caller waits this long before answering
@@ -60,7 +62,7 @@ async function playOne(url, isCancelled, onAudio) {
 
 /**
  * One voice call, with the laptop mic as the caller (mode "mic") or a scripted caller spoken
- * by a second Gnani voice (mode "sim"). Either way the caller's audio goes through real
+ * by a second Gnani voice (mode "sim"; a test call from testCalls.js says its lines in order). Either way the caller's audio goes through real
  * speech-to-text and the real call engine.
  *
  * phase: idle ringing listening hearing thinking speaking caller ended
@@ -140,17 +142,29 @@ export function useVoiceCall({ onUpdate } = {}) {
   const simCallerTurn = async () => {
     const s = sim.current;
     if (!s || ended.current) return;
-    if (s.turns >= SIM_MAX_TURNS) { finish("Simulation stopped after too many turns"); return; }
+    if (s.turns >= (s.lines ? s.maxTurns : SIM_MAX_TURNS)) { finish("Simulation stopped after too many turns"); return; }
     s.turns += 1;
-    const text = s.turns === 1 ? s.read("opening") : s.read(s.lastAction);
+    // a test call says its lines in order; the other simulated callers answer the agent's question
+    const line = s.lines ? s.lines.next() : null;
+    if (s.lines && !line) { finish(waitingRef.current ? "Test call finished: in line for an officer" : "Test call finished"); return; }
+    const text = line ? line.text : s.turns === 1 ? s.read("opening") : s.read(s.lastAction);
     await new Promise((r) => setTimeout(r, SIM_PAUSE_MS));
     if (ended.current) return;
     let clip;
     try {
-      const { audio: url } = await api.say(text, s.lang);
-      setPhase("caller");
-      await playOne(url, () => ended.current, (a) => { audio.current = a; });
-      clip = await (await fetch(url)).blob();
+      const { audio: url } = await api.say(text, line ? line.lang : s.lang);
+      if (line && (line.crack || s.phone)) {
+        // a bad phone line: you hear exactly what speech-to-text gets
+        clip = await roughen(await (await fetch(url)).blob(), { crack: line.crack, phone: s.phone, seed: s.turns });
+        const local = URL.createObjectURL(clip);
+        setPhase("caller");
+        await playOne(local, () => ended.current, (a) => { audio.current = a; });
+        URL.revokeObjectURL(local);
+      } else {
+        setPhase("caller");
+        await playOne(url, () => ended.current, (a) => { audio.current = a; });
+        clip = await (await fetch(url)).blob();
+      }
     } catch (e) {
       add({ who: "note", text: `Couldn't make the caller's voice: ${e.message}` });
       finish("Simulation stopped");
@@ -197,7 +211,7 @@ export function useVoiceCall({ onUpdate } = {}) {
     } catch (e) {
       add({ who: "note", text: e.status === 502 ? "That wasn't clear. Please say it again." : `Something went wrong: ${e.message}` });
       if (!ended.current) {
-        if (sim.current) { sim.current.turns -= 1; await next(); } else rec.current?.listen();
+        if (sim.current) { sim.current.turns -= 1; sim.current.lines?.again(); await next(); } else rec.current?.listen();
       }
       return;
     }
@@ -215,7 +229,7 @@ export function useVoiceCall({ onUpdate } = {}) {
     }
     if (res.ticket) updateTicket(res.ticket, res.heard, res.heard_lang);
     if (sim.current) sim.current.lastAction = res.action;
-    if (res.waiting && sim.current) {
+    if (res.waiting && sim.current && !sim.current.lines) {
       // a simulated caller would keep talking to itself: stop the simulation, in line for an officer
       setPhase("speaking");
       await playAll(res.audio, () => ended.current, (a) => { audio.current = a; });
@@ -241,7 +255,10 @@ export function useVoiceCall({ onUpdate } = {}) {
     startedRef.current = null;
     setMode(m); setLines([]); setTicket(null); setFields({}); setEndNote(null); setSeconds(0); setCallId(null);
     setPhase("ringing");
-    sim.current = m === "sim" ? { read: scriptReader(scenario), lang: scenario.lang, turns: 0, lastAction: null } : null;
+    sim.current = m !== "sim" ? null
+      : scenario.lines   // a test call: its lines in order, maybe on a bad phone line
+        ? { lines: lineReader(scenario), lang: scenario.lang, phone: Boolean(scenario.phone), turns: 0, maxTurns: scenario.lines.length * 2, lastAction: null }
+        : { read: scriptReader(scenario), lang: scenario.lang, turns: 0, lastAction: null };
     scenarioRef.current = m === "sim" ? scenario : null;
     if (m === "mic") {
       rec.current = new Recorder({

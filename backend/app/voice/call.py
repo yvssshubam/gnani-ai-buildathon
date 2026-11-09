@@ -5,6 +5,7 @@ each part is its own cached audio file. Fixed parts are free after the first cal
 """
 from __future__ import annotations
 
+import asyncio
 import time
 from dataclasses import dataclass
 from typing import Optional
@@ -19,6 +20,7 @@ from .stt import PrismaSTT
 from .tts import TimbreTTS
 
 AUDIO_ROUTE = "/api/voice/audio/"
+PLACE_WAIT_SECONDS = 3.0   # longest a turn waits for an off-map area's map lookup
 
 # phrases.py keys that are pieces of the read-back sentence, never spoken on their own
 READBACK_PIECES = {"people", "person", "including", "at", "near", "door", "floor_n",
@@ -107,12 +109,26 @@ async def voice_turn(session, state: VoiceState, audio: bytes, filename: str,
                   "ticket": session.ticket.model_dump()}
     else:
         state.not_heard_in_a_row = 0
+        if hasattr(session, "place_in_turn"):
+            session.place_in_turn = True   # an off-map area is looked up while the reply is spoken
         # handle() may call the LLM (blocking HTTP): run it off the event loop
         result = await run_in_threadpool(session.handle, tr.text, tr.language)
         state.reply_lang = result.get("reply_lang") or state.reply_lang
 
     parts = result.get("reply_parts") or ([result["reply"]] if result.get("reply") else [])
-    urls, tts_ms, tts_error = await speak(tts, parts, result["reply_lang"])
+    if getattr(session, "area_to_place", False):
+        # "Sainikpuri, 500094": find it on OpenStreetMap at the same time as the reply is spoken, so
+        # the pin is on this turn's ticket. If the lookup is slow it carries on and saves the pin later.
+        speech = asyncio.ensure_future(speak(tts, parts, result["reply_lang"]))
+        lookup = asyncio.get_running_loop().run_in_executor(None, session.place_area)
+        try:
+            await asyncio.wait_for(asyncio.shield(lookup), timeout=PLACE_WAIT_SECONDS)
+        except asyncio.TimeoutError:
+            pass
+        urls, tts_ms, tts_error = await speech
+        result["ticket"] = session.ticket.model_dump()
+    else:
+        urls, tts_ms, tts_error = await speak(tts, parts, result["reply_lang"])
     if result.get("reply"):
         question = getattr(session, "question_en", None)
         state.last_agent_text = question() if callable(question) else None

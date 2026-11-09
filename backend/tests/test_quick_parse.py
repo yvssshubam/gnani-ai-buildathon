@@ -92,3 +92,19 @@ def test_who_is_vulnerable():
     assert quick_parse("கைக்குழந்தை", "ask:vulnerable_who").vulnerable == ["infant"]
     assert sorted(quick_parse("बच्चे और दादी", "ask:vulnerable_who").vulnerable) == ["child", "elderly"]
     assert quick_parse("గర్భిణీ", "ask:vulnerable_who").vulnerable == ["pregnant"]
+
+import pytest as _pytest   # noqa: E402
+
+
+@_pytest.mark.parametrize("text", ["అవును, అంతా కరెక్టే.", "అవును, అంతా correctే.", "हाँ, सब सही है।", "yes, all correct"])
+def test_all_correct_at_a_readback_is_a_yes(text):
+    assert quick_parse(text, "readback").confirmation == "yes"
+
+
+def test_yes_but_something_wrong_goes_to_the_llm():
+    assert quick_parse("हाँ, पर गली गलत है", "readback") is None
+
+
+@_pytest.mark.parametrize("text, level", [("पानी घुटनों तक है।", "knee"), ("टखनों तक", "ankle"), ("up to my knees", "knee")])
+def test_plural_body_parts_for_water(text, level):
+    assert quick_parse(text, "ask:water").water_level == level

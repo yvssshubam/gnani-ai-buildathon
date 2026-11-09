@@ -23,16 +23,17 @@ import time
 from dataclasses import dataclass
 from typing import Optional
 
-from . import phrases, prompts
+from . import geocode, phrases, prompts
 from .config import settings
 from .dispatch import HUMAN_OPERATORS, HUMAN_OPERATORS_BUSY
-from .gazetteer import resolve
+from .gazetteer import match_locality, resolve
 from .intents import ANGER, ASK_ROBOT, REFUSE_AI, REQUEST_HUMAN, STATUS_QUERY, detect as detect_intents
 from .language import LanguageTracker, detect_script_language, judge_turn, reply_language
 from .llm import LLM
 from .models import CallState, Extraction, LocConfidence, Status, Ticket, Turn
 from .priority import assess
 from .quick_parse import quick_parse
+from .safety_net import facts_by_rule
 from .store import TicketStore
 
 log = logging.getLogger("dialogue")
@@ -181,6 +182,9 @@ def facts_snapshot(t: Ticket) -> str:
                  t.danger.model_dump()))
 
 
+OFF_MAP_REASON = "area not on the map list: find it by hand"
+
+
 def apply_extraction(t: Ticket, e: Extraction) -> None:
     loc = t.location
     location_changed = False
@@ -206,6 +210,8 @@ def apply_extraction(t: Ticket, e: Extraction) -> None:
     if location_changed:
         loc.confirmed = False
         resolve(loc)
+        if loc.locality and loc.lat is None and OFF_MAP_REASON not in t.followup_reasons:
+            t.followup_reasons.append(OFF_MAP_REASON)   # e.g. "Sainikpuri": not in the demo list
 
     if e.people_count is not None:
         t.people_count = e.people_count
@@ -261,8 +267,12 @@ class CallSession:
         # officer. The AI stops asking, keeps listening and filling the ticket, and reassures.
         self.waiting = False
         self.human_requests = 0                # "let me talk to a person": first -> ack + one question
+        self.told_still_in_line = False        # said "you're still in line" since waiting began
         self.unclear_turns = 0                 # consecutive turns we couldn't understand
         self.one_person_said = False           # "give the phone to one person" (once a call)
+        self.placed_area = None                # the area/PIN we last placed on the map (geocode.area_key)
+        self.place_in_turn = False             # voice calls look the area up while the reply is spoken
+        self.area_to_place = False             # ...and this says there's one to look up this turn
         self.prefix: list[str] = []            # phrase keys said before this turn's line
         self.turn_intents: set[str] = set()
 
@@ -297,11 +307,22 @@ class CallSession:
                                           known_summary(t, reply_language(tentative)[0]))
             self.llm_calls += 1
             self.tokens += extraction.tokens_used
+            if extraction.llm_failed:
+                # The LLM call failed (rate limit, timeout): keep the plainest danger facts by rule,
+                # so "nobody hurt, water rising" or "we are four" isn't lost and asked again.
+                rule = facts_by_rule(text, self.last_action.slot if self.last_action else None)
+                if rule:
+                    extraction = extraction.model_copy(update={**rule, "unclear": False})
 
         # Language: decided after the LLM has read the words, so a wrong speech-to-text guess
         # (Hindi written in Tamil letters) can't switch the call on its own.
         heard, sure = judge_turn(detected_lang, text, extraction.spoken_language, extraction.llm_failed)
-        call_lang = self.lang.update(heard, text, sure)
+        if self.lang.locked and extraction.unclear and not extraction.llm_failed:
+            # A line we couldn't understand ("Hello.", "Can I do?" from a breaking-up line) says
+            # nothing reliable about the language either: it can't switch the call.
+            call_lang = self.lang.current
+        else:
+            call_lang = self.lang.update(heard, text, sure)
         reply_lang, needs_interpreter = reply_language(call_lang)
         t.language = call_lang
         t.needs_interpreter = t.needs_interpreter or needs_interpreter
@@ -311,6 +332,7 @@ class CallSession:
                            "llm_failed": extraction.llm_failed}
         before = facts_snapshot(t)
         apply_extraction(t, extraction)
+        self._place_off_map_area()
         if "rescue" not in t.needs and (t.danger.trapped or t.danger.water_level in
                                         ("knee", "waist", "chest", "neck", "roof")):
             t.needs.append("rescue")
@@ -365,14 +387,18 @@ class CallSession:
                       # a quick-parsed answer ("nahi", "4") counts; "don't know" is handled above
                       or (not used_llm and not extraction.dont_know))
         # Only count it as "stuck" if we asked something and got nothing new back.
+        # A failed LLM call (rate limit, timeout) is our problem, not the caller's: it never counts.
         if progressed or self.waiting:
             self.stuck_turns = 0
-        elif self.last_action is not None:
+        elif self.last_action is not None and not extraction.llm_failed:
             self.stuck_turns += 1
 
         # Bad audio (design v2, 8.4): a second turn in a row we couldn't understand ->
         # "give the phone to one person" before any handover.
-        self.unclear_turns = self.unclear_turns + 1 if (extraction.unclear and not self.facts_changed) else 0
+        # (a failed LLM call or an offer like "shall I tell you?" is not bad audio)
+        not_understood = (extraction.unclear and not extraction.llm_failed and not self.facts_changed
+                          and not extraction.caller_question and not intents)
+        self.unclear_turns = self.unclear_turns + 1 if not_understood else 0
         self.prefix = []
         one_person = self.unclear_turns >= 2 and not self.one_person_said and not self.waiting
 
@@ -389,6 +415,8 @@ class CallSession:
         if action.kind == "ask":
             self.asked.add(f"{action.slot}{action.attempt}")
 
+        if action.kind in ("go_ahead", "reply", "wait"):
+            self.turns -= 1      # "yes, tell me" and waiting don't use up the call's question turns
         if action.kind == "wait":
             reply = " ".join(self.last_parts)
         else:
@@ -436,6 +464,36 @@ class CallSession:
         return t
 
     # ----------------------------------------------------------------- private
+    def _place_off_map_area(self) -> None:
+        """An area not on our list ("Sainikpuri", a PIN code): look it up on OpenStreetMap in the
+        background, so the ticket gets a pin on the map. The caller doesn't wait for it."""
+        if not settings.geocode_enabled:
+            return
+        t, loc = self.ticket, self.ticket.location
+        key = geocode.area_key(loc)
+        if key is None or key == self.placed_area:
+            return
+        if self.placed_area is not None and match_locality(loc.locality) is None:
+            # the caller changed the area: the old pin is wrong now
+            loc.lat = loc.lon = None
+            if geocode.FOUND_REASON in t.followup_reasons:
+                t.followup_reasons.remove(geocode.FOUND_REASON)
+            if loc.locality and OFF_MAP_REASON not in t.followup_reasons:
+                t.followup_reasons.append(OFF_MAP_REASON)
+        self.placed_area = key
+        if loc.lat is None:
+            if self.place_in_turn:
+                self.area_to_place = True      # voice_turn does it alongside the reply's speech
+            else:
+                geocode.place_in_background(t, self.store, OFF_MAP_REASON)
+
+    def place_area(self) -> bool:
+        """Look up the area found this turn (see _place_off_map_area). Blocking: run off the event loop."""
+        if not self.area_to_place:
+            return False
+        self.area_to_place = False
+        return geocode.place(self.ticket, self.store, OFF_MAP_REASON)
+
     def _slot_filled(self, slot: str) -> bool:
         t = self.ticket
         d = t.danger
@@ -444,7 +502,8 @@ class CallSession:
             return any(v is not None for v in (d.injured, d.medical_emergency, d.water_rising,
                                                 d.structure_unsafe, d.trapped)) or d.water_level is not None
         if slot == "area":
-            return (loc.locality is not None and loc.lat is not None) or bool(loc.pincode)
+            # a named area answers "where?", on our map or not (an operator places the rest)
+            return loc.locality is not None or bool(loc.pincode)
         if slot == "street":
             return bool(loc.street or loc.door_no or loc.building or loc.landmark)
         if slot == "floor":
@@ -651,6 +710,7 @@ class CallSession:
             # refused the machine, or asked twice: stop asking, keep them in line
             self.human_requests += 1
             self._start_waiting()
+            self.told_still_in_line = True
             return self._wait_with(["ack", "still_in_line"])
         if REQUEST_HUMAN in intents:
             self.human_requests += 1
@@ -675,6 +735,12 @@ class CallSession:
             keys.append("still_in_line")
         elif self.facts_changed and not newly_urgent:
             keys.append("noted")
+        elif not keys and not self.told_still_in_line:
+            # their first "ok" / "hello?" while waiting: say they are still in line, so the line
+            # doesn't sound dead. After that, silence; the 40 s reassurance covers them.
+            keys.append("still_in_line")
+        if "still_in_line" in keys:
+            self.told_still_in_line = True
         return self._wait_with(keys)
 
     def _wait_with(self, keys: list[str]) -> Action:
