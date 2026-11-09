@@ -28,7 +28,7 @@ def _call(lines, table, max_turns=12):
             break
         r = s.handle(line, "hi-IN")
         actions.append(r["action"])
-        if r["done"]:
+        if r["done"] or r["waiting"]:     # handed over: the caller now waits in line for an officer
             break
     return t, actions
 

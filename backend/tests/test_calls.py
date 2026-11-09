@@ -29,7 +29,9 @@ def test_full_call_happy_path():
     actions = [a for a, _ in replies]
     assert actions == ["ask:danger", "ask:street", "ask:people", "ask:water", "readback", "close"], actions
     t = r["ticket"]
-    assert r["done"] is True
+    # P0: the AI's questions are done, but the caller stays on the line for an officer (waiting room)
+    assert r["done"] is False and r["waiting"] is True
+    assert "An officer is being alerted now" in replies[-1][1]
     assert t["location"]["locality"] == "Velachery"
     assert t["location"]["confidence"] == "exact"
     assert t["location"]["confirmed"] is True
@@ -37,7 +39,7 @@ def test_full_call_happy_path():
     assert "elderly" in t["vulnerable"]
     assert t["priority"] == "P0"  # rising water + elderly + knee level
     assert t["escalate_to_human"] is True
-    assert t["status"] == "new" and t["call_state"] == "completed"
+    assert t["status"] == "new" and t["call_state"] == "in_progress"
     assert " ".join(cid) in replies[-1][1]  # ticket digits spoken in the closing line
 
 
@@ -63,10 +65,10 @@ def test_vague_location_ends_with_callback_flag():
         "yes",
     )
     t = r["ticket"]
-    assert r["done"] is True
+    assert r["waiting"] is True                       # P1: stays in line for an officer
     assert t["location"]["confidence"] == "unknown"
     assert t["status"] == "needs_callback"
-    assert "officer will call you back" in replies[-1][1]
+    assert "An officer will speak to you" in replies[-1][1]
 
 
 def test_correction_at_readback():
@@ -95,15 +97,22 @@ def test_dropped_call_keeps_partial_ticket():
     assert t["danger"]["water_rising"] is True
 
 
-def test_asking_for_human_escalates():
-    _, _, r = call("I want to talk to a real person, we are in Saidapet")
-    assert r["ticket"]["escalate_to_human"] is True
+def test_asking_for_a_person_is_kept_in_line_not_marked_urgent():
+    """Design v2, 5.4: no operator free -> "you're in line", then one useful question.
+    It is not a P0: the caller must not hear "your case is marked most urgent"."""
+    _, replies, r = call("I want to talk to a real person, we are in Saidapet")
+    assert r["ticket"]["escalate_to_human"] is False
+    assert "most urgent" not in replies[0][1]
+    assert "You are in line for an officer. While you wait, one question." in replies[0][1]
+    assert replies[0][0].startswith("ask:")
+    assert "caller asked for a person" in r["ticket"]["followup_reasons"]
 
 
 def test_turn_limit_closes_call():
     texts = ["hmm"] * 12
     _, replies, r = call(*texts)
-    assert r["done"] is True
+    assert r["done"] or r["waiting"]                  # never loops: handed to an officer
+    assert any(a == "handoff" for a, _ in replies)
 
 
 def test_ticket_list_sorted_by_priority():

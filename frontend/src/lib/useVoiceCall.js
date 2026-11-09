@@ -7,6 +7,7 @@ import { scriptReader } from "./scenarios.js";
 const RING_MS = 1800;
 const SIM_PAUSE_MS = 700;   // the simulated caller waits this long before answering
 const SIM_MAX_TURNS = 16;   // safety stop for a simulated call
+const REASSURE_MS = 40000;  // waiting in line: "you're still in line" after this much quiet (design v2, 5.5)
 
 // What the live ticket shows, in order, and how to read each from the ticket
 export const FIELDS = [
@@ -74,6 +75,7 @@ export function useVoiceCall({ onUpdate } = {}) {
   const [seconds, setSeconds] = useState(0);
   const [level, setLevel] = useState(0);
   const [endNote, setEndNote] = useState(null);
+  const [waiting, setWaiting] = useState(false);   // in line for an officer: the AI listens, asks nothing
 
   const rec = useRef(null);
   const audio = useRef(null);
@@ -85,6 +87,9 @@ export function useVoiceCall({ onUpdate } = {}) {
   const scenarioRef = useRef(null);
   const onUpdateRef = useRef(onUpdate);
   onUpdateRef.current = onUpdate;
+  const reassure = useRef({ audio: [], timer: null });
+  const waitingRef = useRef(false);
+  const stopReassure = () => { clearTimeout(reassure.current.timer); reassure.current.timer = null; };
 
   useEffect(() => () => { ended.current = true; rec.current?.stop(); audio.current?.pause(); }, []);
   useEffect(() => {
@@ -122,6 +127,7 @@ export function useVoiceCall({ onUpdate } = {}) {
 
   const finish = useCallback((note) => {
     ended.current = true;
+    stopReassure();
     rec.current?.stop();
     rec.current = null;
     audio.current?.pause();
@@ -153,10 +159,26 @@ export function useVoiceCall({ onUpdate } = {}) {
     if (!ended.current) await onTurn(clip);
   };
 
+  /** While waiting in line: after REASSURE_MS of quiet, say "you're still in line" (silence makes
+   *  people hang up), then listen again. Never talks over a caller who is speaking. */
+  const scheduleReassure = () => {
+    stopReassure();
+    if (!waitingRef.current || !reassure.current.audio.length) return;
+    reassure.current.timer = setTimeout(async () => {
+      if (ended.current || !waitingRef.current) return;
+      if (rec.current?.mode !== "listening") { scheduleReassure(); return; }   // they're talking: try later
+      rec.current.pause();
+      setPhase("speaking");
+      await playAll(reassure.current.audio, () => ended.current, (a) => { audio.current = a; });
+      if (ended.current) return;
+      rec.current?.listen();
+      scheduleReassure();
+    }, REASSURE_MS);
+  };
   const next = async () => {
     if (ended.current) return;
     if (sim.current) await simCallerTurn();
-    else rec.current?.listen();
+    else { rec.current?.listen(); scheduleReassure(); }
   };
 
   const speakThenNext = async (urls) => {
@@ -166,6 +188,7 @@ export function useVoiceCall({ onUpdate } = {}) {
   };
 
   const onTurn = async (wav) => {
+    stopReassure();
     setPhase("thinking");
     const t0 = performance.now();
     let res;
@@ -181,10 +204,24 @@ export function useVoiceCall({ onUpdate } = {}) {
     if (ended.current) return;
     const total = Math.round(performance.now() - t0);
     if (res.heard) add({ who: "caller", text: res.heard, lang: res.heard_lang });
-    add({ who: "agent", text: res.reply, lang: res.reply_lang,
-      timing: `speech to text ${res.stt_ms} ms, agent ${res.turn_ms ?? 0} ms, voice ${res.tts_ms} ms, total ${total} ms` });
+    if (res.reply) {
+      add({ who: "agent", text: res.reply, lang: res.reply_lang,
+        timing: `speech to text ${res.stt_ms} ms, agent ${res.turn_ms ?? 0} ms, voice ${res.tts_ms} ms, total ${total} ms` });
+    }
+    if (res.waiting) {
+      waitingRef.current = true;
+      setWaiting(true);
+      if (res.reassure_audio?.length) reassure.current.audio = res.reassure_audio;
+    }
     if (res.ticket) updateTicket(res.ticket, res.heard, res.heard_lang);
     if (sim.current) sim.current.lastAction = res.action;
+    if (res.waiting && sim.current) {
+      // a simulated caller would keep talking to itself: stop the simulation, in line for an officer
+      setPhase("speaking");
+      await playAll(res.audio, () => ended.current, (a) => { audio.current = a; });
+      finish("In line for an officer");
+      return;
+    }
     if (res.done) {
       setPhase("speaking");
       await playAll(res.audio, () => ended.current, (a) => { audio.current = a; });
@@ -197,6 +234,9 @@ export function useVoiceCall({ onUpdate } = {}) {
   /** start({ mode: "mic" }) or start({ mode: "sim", scenario }) */
   const start = async ({ mode: m, scenario }) => {
     ended.current = false;
+    waitingRef.current = false;
+    setWaiting(false);
+    reassure.current.audio = [];
     ticketRef.current = null;
     startedRef.current = null;
     setMode(m); setLines([]); setTicket(null); setFields({}); setEndNote(null); setSeconds(0); setCallId(null);
@@ -244,7 +284,7 @@ export function useVoiceCall({ onUpdate } = {}) {
   const stopForTakeover = () => finish("An operator took over the call");
 
   return {
-    phase, mode, lines, ticket, fields, callId, seconds, level, endNote,
+    phase, mode, lines, ticket, fields, callId, seconds, level, endNote, waiting,
     scenario: scenarioRef.current,
     active: !["idle", "ended"].includes(phase),
     answered: questionsAnswered(ticket),

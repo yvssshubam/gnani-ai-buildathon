@@ -89,12 +89,22 @@ async def voice_turn(session, state: VoiceState, audio: bytes, filename: str,
     """Raises GnaniError if speech recognition fails (the caller should be asked to repeat)."""
     tr = await stt.transcribe(audio, filename=filename, previous_text=stt_context(state.last_agent_text))
 
+    waiting = bool(getattr(session, "waiting", False))
     if not tr.text:
-        # Silence, wind, rain: don't count it as a turn and don't call the LLM. Ask again.
+        # Silence, wind, rain: don't count it as a turn and don't call the LLM. Ask again; the
+        # second time in a row, ask for one person close to the phone (design v2, 8.4). A caller
+        # waiting in line for an officer isn't asked anything: the reassurance timer covers them.
         state.not_heard_in_a_row += 1
-        reply = phrases.say("not_heard", state.reply_lang)
-        result = {"reply": reply, "reply_parts": [reply], "reply_lang": state.reply_lang,
-                  "action": "not_heard", "done": False, "ticket": session.ticket.model_dump()}
+        if waiting:
+            reply = ""
+        elif state.not_heard_in_a_row == 2:
+            reply = phrases.say("one_person", state.reply_lang)
+        else:
+            reply = phrases.say("not_heard", state.reply_lang)
+        result = {"reply": reply, "reply_parts": [reply] if reply else [], "reply_lang": state.reply_lang,
+                  "action": "not_heard", "done": False, "waiting": waiting,
+                  "reassure": phrases.say("still_in_line", state.reply_lang) if waiting else None,
+                  "ticket": session.ticket.model_dump()}
     else:
         state.not_heard_in_a_row = 0
         # handle() may call the LLM (blocking HTTP): run it off the event loop
@@ -115,6 +125,10 @@ async def voice_turn(session, state: VoiceState, audio: bytes, filename: str,
         "audio": urls,
         "not_heard_in_a_row": state.not_heard_in_a_row,
     })
+    if result.get("waiting") and result.get("reassure"):
+        # "You're still in line": the browser plays it after ~40 s of quiet (silence makes people hang up)
+        reassure_urls, _, _ = await speak(tts, [result["reassure"]], result["reply_lang"])
+        result["reassure_audio"] = reassure_urls
     if tts_error:
         result["tts_error"] = tts_error
     return result

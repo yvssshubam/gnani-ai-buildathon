@@ -191,3 +191,32 @@ def test_hindi_written_in_tamil_letters_is_answered_in_hindi_with_the_hindi_voic
     res = api.post(f"/api/voice/calls/{call['call_id']}/turn", content=b"a").json()
     assert res["reply_lang"] == "hi-IN" and res["lang_check"]["heard"] == "hi-IN"
     assert api.spoken and all(lang == "hi-IN" for _, lang in api.spoken)   # Yashvi, not the Tamil voice
+
+
+# ---------------------------------------------------------------- waiting room and noise (design v2)
+
+def test_second_unheard_turn_asks_for_one_person(api):
+    call = start(api)
+    api.stt.queue += [("", None), ("", None)]
+    first = api.post(f"/api/voice/calls/{call['call_id']}/turn", content=b"a").json()
+    second = api.post(f"/api/voice/calls/{call['call_id']}/turn", content=b"b").json()
+    assert first["reply"] == phrases.say("not_heard", "hi-IN")
+    assert second["reply"] == phrases.say("one_person", "hi-IN")
+
+
+def test_waiting_caller_gets_reassurance_audio_and_silence_is_not_answered(api):
+    call = start(api)
+    api.stt.queue += [("मैं मशीन से बात नहीं करूँगा", "hi-IN"), ("", None)]
+    res = api.post(f"/api/voice/calls/{call['call_id']}/turn", content=b"a").json()
+    assert res["waiting"] and res["reassure"] == phrases.say("still_in_line", "hi-IN")
+    assert res["reassure_audio"] and res["reassure_audio"][0].startswith("/api/voice/audio/")
+    quiet = api.post(f"/api/voice/calls/{call['call_id']}/turn", content=b"b").json()
+    assert quiet["reply"] == "" and quiet["audio"] == [] and quiet["waiting"]
+
+
+def test_take_over_ends_a_waiting_call(api):
+    call = start(api)
+    api.stt.queue.append(("मैं मशीन से बात नहीं करूँगा", "hi-IN"))
+    api.post(f"/api/voice/calls/{call['call_id']}/turn", content=b"a")
+    api.post(f"/api/tickets/{call['call_id']}/take-over")
+    assert main.sessions[call["call_id"]].done

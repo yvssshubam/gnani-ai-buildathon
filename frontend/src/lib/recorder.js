@@ -17,7 +17,7 @@
 const TARGET_RATE = 16000;
 const SILENCE_MS = 1000;      // this much quiet after speech ends the turn
 const MIN_SPEECH_MS = 300;    // shorter sounds (a cough, a click) are ignored
-const MAX_TURN_MS = 25000;    // Prisma accepts at most 30 s per clip
+const MAX_TURN_MS = 12000;    // hard cap: in constant noise silence never comes, so cut and send (design v2, 8.3)
 const PREROLL_MS = 300;       // keep the audio from just before speech started
 const SETTLE_MS = 250;        // ignored after the agent stops: the end of its voice, speaker echo
 const CALIBRATE_MS = 400;     // background noise measured before each turn

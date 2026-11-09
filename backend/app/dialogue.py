@@ -25,7 +25,9 @@ from typing import Optional
 
 from . import phrases, prompts
 from .config import settings
+from .dispatch import HUMAN_OPERATORS, HUMAN_OPERATORS_BUSY
 from .gazetteer import resolve
+from .intents import ANGER, ASK_ROBOT, REFUSE_AI, REQUEST_HUMAN, STATUS_QUERY, detect as detect_intents
 from .language import LanguageTracker, detect_script_language, judge_turn, reply_language
 from .llm import LLM
 from .models import CallState, Extraction, LocConfidence, Status, Ticket, Turn
@@ -105,7 +107,7 @@ def safe_ack(ack: Optional[str], lang: str) -> Optional[str]:
 
 @dataclass
 class Action:
-    kind: str                 # ask | go_ahead | reply | readback | ask_correction | close | handoff
+    kind: str                 # ask | go_ahead | reply | readback | ask_correction | close | handoff | wait
     slot: Optional[str] = None
     attempt: int = 1
     urgent_preface: bool = False
@@ -254,11 +256,24 @@ class CallSession:
         self.replies = 0                       # LLM-written replies to off-script turns (at most 3 a call)
         self.last_reply: Optional[str] = None  # what we said in the last such reply (context for the next turn)
         self.asked: set[str] = set()           # question wordings already used ("area3", "street1"...)
+        # The waiting room (design v2, section 5): once the AI's questions are done for a P0/P1 case,
+        # or the caller wants a human, the line stays open and the caller waits in line for an
+        # officer. The AI stops asking, keeps listening and filling the ticket, and reassures.
+        self.waiting = False
+        self.human_requests = 0                # "let me talk to a person": first -> ack + one question
+        self.unclear_turns = 0                 # consecutive turns we couldn't understand
+        self.one_person_said = False           # "give the phone to one person" (once a call)
+        self.prefix: list[str] = []            # phrase keys said before this turn's line
+        self.turn_intents: set[str] = set()
 
     # ------------------------------------------------------------------ public
     def greeting(self) -> str:
         text = prompts.GREETING["text"]
         self._log("agent", text, prompts.GREETING["lang"])
+        # The greeting ends with a danger question, so the first answer is read as its answer
+        # ("nahi" = nobody in danger). It doesn't use up one of the danger question's two tries:
+        # callers answer a greeting by describing what happened, and danger decides P0.
+        self.last_action = Action("ask", slot="danger", attempt=1)
         self.store.save(self.ticket)
         return text
 
@@ -302,9 +317,17 @@ class CallSession:
 
         was_escalated = t.escalate_to_human
         t.priority, t.priority_reasons, alert = assess(t)
-        if extraction.asks_for_human:
-            alert = True
-            t.priority_reasons.append("caller asked for a person")
+        intents = detect_intents(text)
+        if extraction.asks_for_human and REFUSE_AI not in intents:
+            intents.add(REQUEST_HUMAN)
+        self.turn_intents = intents
+        if intents & {REQUEST_HUMAN, REFUSE_AI}:
+            reason = "caller declined the AI" if REFUSE_AI in intents else "caller asked for a person"
+            if reason not in t.followup_reasons:
+                t.followup_reasons.append(reason)
+        if STATUS_QUERY in intents:
+            # one answer for every status question ("kab aayegi?", "any update?")
+            extraction.caller_question = "when_help"
         t.escalate_to_human = was_escalated or alert
 
         new_panic = extraction.panic == "high" and not self.panic
@@ -323,6 +346,9 @@ class CallSession:
         # "boat kab aayegi?" asked again and again is a caller who is stuck.
         new_question = ((extraction.caller_question in ANSWERABLE | {"rephrase", "go_ahead"} or bool(extraction.reply))
                         and extraction.caller_question not in self.questions_seen)
+        for intent in intents & {REQUEST_HUMAN, ASK_ROBOT}:
+            new_question = new_question or intent not in self.questions_seen
+            self.questions_seen.add(intent)
         if extraction.dont_know and self.last_action and self.last_action.slot == "area":
             self.area_unknown = True
         if extraction.caller_question:
@@ -339,24 +365,45 @@ class CallSession:
                       # a quick-parsed answer ("nahi", "4") counts; "don't know" is handled above
                       or (not used_llm and not extraction.dont_know))
         # Only count it as "stuck" if we asked something and got nothing new back.
-        if progressed:
+        if progressed or self.waiting:
             self.stuck_turns = 0
         elif self.last_action is not None:
             self.stuck_turns += 1
 
-        action = self._next_action(extraction)
+        # Bad audio (design v2, 8.4): a second turn in a row we couldn't understand ->
+        # "give the phone to one person" before any handover.
+        self.unclear_turns = self.unclear_turns + 1 if (extraction.unclear and not self.facts_changed) else 0
+        self.prefix = []
+        one_person = self.unclear_turns >= 2 and not self.one_person_said and not self.waiting
+
+        if self.waiting:
+            action = self._waiting_action(intents, t.escalate_to_human and not was_escalated)
+        else:
+            action = self._intent_action(intents)
+            if action is None:
+                if one_person:
+                    self.one_person_said = True
+                    self.prefix.append("one_person")   # this turn: the ladder's next step, not a handover
+                action = self._next_action(extraction)
         action.urgent_preface = t.escalate_to_human and not was_escalated
         if action.kind == "ask":
             self.asked.add(f"{action.slot}{action.attempt}")
 
-        reply = self._say(action, reply_lang, extraction, used_llm, new_panic)
+        if action.kind == "wait":
+            reply = " ".join(self.last_parts)
+        else:
+            reply = self._say(action, reply_lang, extraction, used_llm, new_panic)
         if action.kind == "close":
-            self._finish()
+            if self._stays_on_line():
+                self._finish(waiting=True)
+            else:
+                self._finish()
         elif action.kind == "handoff":
             self._hand_off()
-        if action.kind in ("go_ahead", "reply"):
+        if action.kind in ("go_ahead", "reply", "wait"):
             # after "yes, tell me" the caller's answer is still to the question before it
-            self.last_reply = reply
+            # (and while waiting in line, the last real question stays the context)
+            self.last_reply = reply or None
         else:
             self.last_action = action
             self.last_reply = None
@@ -382,7 +429,8 @@ class CallSession:
         if not self.done:
             t.call_state = CallState.DROPPED
             t.status = Status.NEEDS_CALLBACK
-            t.followup_reasons.append("call dropped mid-conversation")
+            t.followup_reasons.append("hung up while waiting for an officer: call back" if self.waiting
+                                      else "call dropped mid-conversation")
             self.done = True
             self.store.save(t)
         return t
@@ -436,7 +484,7 @@ class CallSession:
 
         # Not getting anywhere? A human takes over (open -> yes/no -> human).
         limit = STUCK_LIMIT_PANIC if self.panic else STUCK_LIMIT
-        if self.stuck_turns >= limit:
+        if self.stuck_turns >= limit and "one_person" not in self.prefix:
             return Action("handoff")
 
         if self.turns >= settings.max_turns:
@@ -514,6 +562,11 @@ class CallSession:
             return phrases.say("ask_correction", lang)
         if a.kind == "handoff":
             return phrases.say("handoff", lang, digits=spoken_digits(t.id))
+        if self._stays_on_line():
+            # honest per priority (design v2, 5.3): P0 = an officer is alerted now; P1 = an officer
+            # will speak to you, stay or hang up and keep your place. Neither ends the call.
+            key = "p0_wait" if t.priority == "P0" else "p1_wait"
+            return phrases.say(key, lang, digits=spoken_digits(t.id))
         key = "close_callback" if self._needs_location_callback() else "close"
         return phrases.say(key, lang, digits=spoken_digits(t.id))
 
@@ -523,6 +576,14 @@ class CallSession:
         self.ack_status = "-"
         if a.urgent_preface:
             parts.append(phrases.say("urgent", lang))
+        elif self.turn_intents & {REQUEST_HUMAN, ASK_ROBOT}:
+            # "I want a person" / "are you a robot?": the fixed reply answers it; an ack would echo
+            # the request back ("talk to a person, okay")
+            self.ack_status = "skipped (request answered by a fixed line)"
+        elif ANGER in self.turn_intents:
+            # shouting is distress, not abuse: one line, then straight on (never "please calm down")
+            parts.append(phrases.say("anger_ack", lang))
+            self.ack_status = "skipped (anger: anger_ack)"
         elif e.caller_question in ANSWERABLE:
             self.ack_status = "skipped (answering their question instead)"
         elif e.caller_question:
@@ -545,8 +606,11 @@ class CallSession:
         if new_panic and not self.calmed:
             parts.append(phrases.say("calm", lang))
             self.calmed = True
-        if e.caller_question in ANSWERABLE:
+        if e.caller_question == "when_help":
+            parts.append(phrases.say("status_deflect", lang))   # no time, no promise
+        elif e.caller_question in ANSWERABLE:
             parts.append(phrases.say(f"ans_{e.caller_question}", lang))
+        parts.extend(phrases.say(k, lang) for k in self.prefix)
         if a.rephrased:
             parts.append(phrases.say("rephrase", lang))
         parts.append(self._line(a, lang))
@@ -568,11 +632,58 @@ class CallSession:
             t.followup_reasons.append(reason)
         if "needs human: caller could not answer" not in t.priority_reasons:
             t.priority_reasons.append("needs human: caller could not answer")
-        self.done = True
+        self._start_waiting()
 
-    def _finish(self) -> None:
+    def _stays_on_line(self) -> bool:
+        """P0 and P1 callers stay on the line for an officer; P2 and P3 are reviewed, not called."""
+        return self.ticket.priority in ("P0", "P1") or self.ticket.escalate_to_human
+
+    def _start_waiting(self) -> None:
         t = self.ticket
-        t.call_state = CallState.COMPLETED
+        self.waiting = True
+        if "waiting on the line for an officer" not in t.followup_reasons:
+            t.followup_reasons.append("waiting on the line for an officer")
+
+    def _intent_action(self, intents: set[str]) -> Optional[Action]:
+        """Requests for a person, robot and status questions, anger (design v2, 5.4 and 7.4).
+        Returns an action that replaces the next question, or None (prefix lines may be queued)."""
+        if REFUSE_AI in intents or (REQUEST_HUMAN in intents and self.human_requests >= 1):
+            # refused the machine, or asked twice: stop asking, keep them in line
+            self.human_requests += 1
+            self._start_waiting()
+            return self._wait_with(["ack", "still_in_line"])
+        if REQUEST_HUMAN in intents:
+            self.human_requests += 1
+            if HUMAN_OPERATORS_BUSY < HUMAN_OPERATORS:
+                return Action("handoff")      # someone is free: pass the call on now
+            self.prefix.append("request_human_ack")   # then the most important missing question
+        if ASK_ROBOT in intents:
+            self.prefix.append("yes_automated")
+        return None
+
+    def _waiting_action(self, intents: set[str], newly_urgent: bool) -> Action:
+        """A caller turn while they wait for an officer: keep filling the ticket, ask nothing.
+        Say only what this turn needs; often nothing."""
+        keys = []
+        if newly_urgent:
+            keys.append("urgent")
+        if STATUS_QUERY in intents:
+            keys.append("status_deflect")
+        if ASK_ROBOT in intents:
+            keys.append("yes_automated")
+        elif intents & {REQUEST_HUMAN, REFUSE_AI}:
+            keys.append("still_in_line")
+        elif self.facts_changed and not newly_urgent:
+            keys.append("noted")
+        return self._wait_with(keys)
+
+    def _wait_with(self, keys: list[str]) -> Action:
+        lang = reply_language(self.ticket.language)[0]
+        self.last_parts = [phrases.say(k, lang) for k in keys]
+        return Action("wait")
+
+    def _finish(self, waiting: bool = False) -> None:
+        t = self.ticket
         if self._needs_location_callback():
             t.status = Status.NEEDS_CALLBACK
             t.followup_reasons.append(f"location precision only '{t.location.confidence.value}'")
@@ -584,6 +695,11 @@ class CallSession:
         if t.priority == "P2" and t.danger.water_level not in (None, "none") \
                 and RECHECK_REASON not in t.followup_reasons:
             t.followup_reasons.append(RECHECK_REASON)
+        if waiting:
+            # the AI's questions are done; the caller stays on the line for an officer
+            self._start_waiting()
+            return
+        t.call_state = CallState.COMPLETED
         self.done = True
 
     def question_en(self) -> Optional[str]:
@@ -616,5 +732,8 @@ class CallSession:
             "reply_lang": reply_language(self.ticket.language)[0],
             "action": action.key if action else None,
             "done": self.done,
+            # the caller is in line for an officer: keep the line open, reassure every ~40 s
+            "waiting": self.waiting,
+            "reassure": phrases.say("still_in_line", reply_language(self.ticket.language)[0]) if self.waiting else None,
             "ticket": self.ticket.model_dump(),
         }

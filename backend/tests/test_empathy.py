@@ -1,4 +1,5 @@
 """Acknowledgements, calming, and answers to off-script questions, all from the one extract call."""
+from app import phrases
 from app.dialogue import CallSession, safe_ack
 from app.models import Extraction
 from app.store import TicketStore
@@ -59,7 +60,8 @@ def test_bad_ack_falls_back_to_fixed(tmp_path):
 def test_question_gets_fixed_answer_then_flow_continues(tmp_path):
     s = session(tmp_path, [Extraction(locality="Adyar", caller_question="when_help")])
     r = s.handle("அடையாறுல இருக்கோம், படகு எப்ப வரும்?", "ta-IN")
-    assert r["reply"].startswith("சரியான நேரம் சொல்ல முடியாது")  # answer first, no "சரி." before it
+    # status questions get one fixed answer: no time, no promise (design v2, 7.4); no "சரி." before it
+    assert r["reply"].startswith(phrases.say("status_deflect", "ta-IN"))
     assert r["action"] == "ask:danger"
 
 
@@ -86,8 +88,8 @@ def test_panicked_caller_repeating_same_thing_gets_a_human(tmp_path):
     r2 = s.handle(line, "hi-IN")                           # no new info (1) -> same simple question again
     assert r2["action"] == "ask:danger"
     r3 = s.handle(line, "hi-IN")                           # no new info (2) -> human
-    assert r3["action"] == "handoff" and r3["done"] is True
-    assert "बचाव अधिकारी से जोड़ा जा रहा है" in r3["reply"]
+    assert r3["action"] == "handoff" and r3["waiting"] is True   # stays in line for an officer
+    assert "मैं आपकी कॉल एक ऑफिसर को दे रही हूँ" in r3["reply"]
     t = r3["ticket"]
     assert t["call_state"] == "handed_off" and t["status"] == "needs_callback"
     assert t["escalate_to_human"] is True
@@ -96,9 +98,12 @@ def test_panicked_caller_repeating_same_thing_gets_a_human(tmp_path):
 
 def test_calm_caller_gets_three_tries_before_handoff(tmp_path):
     s = session(tmp_path, [Extraction(unclear=True) for _ in range(6)])
-    actions = [s.handle("hello hello can you hear", "en-IN")["action"] for _ in range(4)]
-    # opening + 3 unanswered questions -> human
-    assert actions == ["ask:danger", "ask:danger", "ask:area", "handoff"], actions
+    results = [s.handle("hello hello can you hear", "en-IN") for _ in range(3)]
+    actions = [r["action"] for r in results]
+    # the greeting's danger question + 2 more, none understood -> human. On the 2nd unclear turn
+    # the ladder says "give the phone to one person" first (design v2, 8.4).
+    assert actions == ["ask:danger", "ask:danger", "handoff"], actions
+    assert "give the phone to one person" in results[1]["reply"]
 
 
 def test_no_empty_readback(tmp_path):
@@ -143,10 +148,10 @@ def test_dont_know_street_is_an_answer_not_stuck(tmp_path):
     assert r["done"] is False                          # NOT handed off
     for line in ["पहली मंज़िल", "चार लोग", "नहीं", "कमर तक", "हाँ"]:
         r = s.handle(line, "hi-IN")
-        if r["done"]:
+        if r["done"] or r["waiting"]:
             break
     t = r["ticket"]
-    assert t["call_state"] == "completed"
+    assert r["waiting"] and t["call_state"] == "in_progress"   # rising water: P1, stays in line
     assert t["status"] == "needs_callback"             # area-only -> officer calls back to confirm location
     assert any("area" in f for f in t["followup_reasons"])
 

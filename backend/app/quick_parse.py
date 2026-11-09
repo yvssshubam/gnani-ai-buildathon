@@ -9,6 +9,7 @@ unclear goes to the LLM as before.
 from __future__ import annotations
 
 import re
+import unicodedata
 from typing import Optional
 
 from .gazetteer import clean_pincode
@@ -162,9 +163,18 @@ def quick_parse(text: str, last_action_key: Optional[str]) -> Optional[Extractio
     is_yes = _starts_with_any(t, YES)
     is_no = _starts_with_any(t, NO)
 
-    # "I don't know" is a real answer to any question: note it and move on (no LLM call).
-    if any(_has(t, d) for d in DONT_KNOW) and last_action_key.startswith("ask:"):
-        return Extraction(dont_know=True)
+    # "I don't know" is a real answer to any question: note it and move on (no LLM call) - but only
+    # when it is (nearly) the whole answer. "తెలియదు, నీళ్ళు ఎక్కువ ఉన్నాయి" ("don't know, lots of
+    # water") carries a fact and a language: the LLM reads that one.
+    if last_action_key.startswith("ask:"):
+        for d in DONT_KNOW:
+            if _has(t, d):
+                # strip punctuation only: vowel signs (ా, ्) aren't \w but are part of the word
+                rest = "".join(" " if unicodedata.category(c).startswith("P") else c
+                               for c in t.replace(d, " ")).split()
+                if len(rest) <= 1:          # "pata nahi", "తెలియదు సార్", "I don't know ji"
+                    return Extraction(dont_know=True)
+                break
 
     if last_action_key in ("readback",):
         # only a PURE yes / no skips the LLM: "haan, second floor" carries a correction

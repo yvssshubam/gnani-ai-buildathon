@@ -18,7 +18,9 @@ export default function CallScreen() {
       <header className="call-bar">
         <span className="brand-name">Surgeline</span>
         <span className="call-bar-note">
-          {call.phase === "idle" ? "Flood rescue line" : "All 3 operators are on other calls. Surgeline answered this one."}
+          {call.phase === "idle" ? "Flood rescue line"
+            : call.waiting ? "In line for an officer. Surgeline is listening and keeps the ticket up to date."
+            : "All operators are busy. The caller is in line for one; Surgeline is taking the details."}
         </span>
         {call.active && call.phase !== "ringing" && <span className="live-timer"><span className="rec-dot" />Live call {mmss(call.seconds)}</span>}
         {call.phase === "ended" && <span className="live-timer ended">Call ended {mmss(call.seconds)}</span>}

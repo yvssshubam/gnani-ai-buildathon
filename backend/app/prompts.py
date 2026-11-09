@@ -24,11 +24,15 @@ confirmation: yes|no when answering a read-back
 correction: true if changing earlier details (incl. giving new details instead of yes/no after a read-back)
 asks_for_human: true if they want a real person
 dont_know: true if they say they don't know / can't tell what was asked (e.g. the street name)
+ack and reply: everyday spoken words, the way people talk on the phone, never formal or bookish ones.
+  English words people commonly use are fine and preferred over formal native ones: floor, area, officer,
+  team, phone, time ("चौथा फ्लोर", not "चौथी मंज़िल"; "ఆఫీసర్", not "అధికారి").
 ack: ALWAYS include. Max 6 words, casual spoken style, in the CALL LANGUAGE given under Known,
   even if this utterance is in English ("Church Road, first floor" in a Hindi call -> "चर्च रोड, ठीक है").
-  Use that language's OWN script, never English letters: "गलत है, समझ गया", not "galat, samjha".
+  Hindi: the agent is a woman, so female verb forms ("समझ गई", never "समझ गया").
+  Use that language's OWN script, never English letters: "गलत है, समझ गई", not "galat, samjha".
   It MUST mention one specific thing they just said (a person, place or situation), not just "understood".
-  Good: "பாட்டி கூட இருக்காங்க, புரிஞ்சுது" / "காந்தி தெரு, சரி" / "पानी बढ़ रहा है, समझ गया" / "నీళ్ళు పెరుగుతున్నాయి, అర్థమైంది"
+  Good: "பாட்டி கூட இருக்காங்க, புரிஞ்சுது" / "காந்தி தெரு, சரி" / "पानी बढ़ रहा है, समझ गई" / "నీళ్ళు పెరుగుతున్నాయి, అర్థమైంది"
   Bad: "புரிந்தது" (too generic). No question, no promise, never a time.
 caller_question: if they asked or raised something: when_help (when will help/boat come) |
   stay_or_move (should we stay/go up/leave) | electricity (wires, current, shock) | animal (snake etc.) |
@@ -65,8 +69,13 @@ Then do ONLY this: {instruction}
 Never promise when rescue will arrive. Output only the reply text."""
 
 GREETING = {
-    # Pre-recorded in voice mode. Hindi and English, and an invitation to speak in any language:
-    # the caller's first sentence sets the call's language.
-    "text": "बाढ़ बचाव हेल्पलाइन। बताइए, क्या हुआ है? Flood rescue line. Tell me what's happening, in any language.",
+    # Pre-recorded in voice mode. The waiting room (design v2, 5.3): say it is automated, that the
+    # caller already holds a place in line for an officer, and ask the danger question straight
+    # away. Hindi, then a short English tag that also invites any language. Target: under 7 s
+    # (check with scripts/greeting_length.py).
+    # Measured: 10.2 s (first version), 7.7 s (with "Any language."). This one drops the English tag
+    # (the call follows whatever language the caller answers in) and one full stop's pause.
+    # "ऑटोमैटिक असिस्टेंट" is the disclosure, and English speakers understand it too.
+    "text": "बाढ़ हेल्पलाइन, ऑटोमैटिक असिस्टेंट। आप लाइन में हैं, किसी की जान को खतरा है?",
     "lang": "hi-IN",
 }
