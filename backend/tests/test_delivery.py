@@ -84,8 +84,10 @@ def test_tags_only_reach_timbre_v3(monkeypatch):
 
 
 def test_prewarm_covers_the_fixed_halves_of_the_readback():
+    line = phrases.say("readback", "en-IN", details="4 people")
+    halves = [p.text for p in delivery.pieces(line, "en-IN") if p.fixed]
     texts = [t for t, _, _ in delivery.fixed_pieces(["hi-IN", "en-IN"])]
-    assert "Let me check." in texts and "Is that correct?" in texts
+    assert halves and all(h in texts for h in halves)
     assert phrases.say("calm", "hi-IN") in texts and not any("{" in t for t in texts)
 
 
@@ -113,7 +115,13 @@ def test_a_reply_plays_as_one_clip(tmp_path):
 
 
 def test_a_failed_part_falls_back_to_separate_clips(tmp_path):
-    tts = FakeTTS(tmp_path, fail_on="आप कहाँ")
-    parts = [phrases.say("ack", "hi-IN"), phrases.say("area1", "hi-IN")]
-    urls, _, error = asyncio.run(speak(tts, parts, "hi-IN"))
+    question = phrases.say("area1", "hi-IN")
+    tts = FakeTTS(tmp_path, fail_on=question)
+    urls, _, error = asyncio.run(speak(tts, [phrases.say("ack", "hi-IN"), question], "hi-IN"))
     assert urls[0] and urls[1] is None and "402" in error
+
+
+def test_acks_and_replies_never_end_in_an_exclamation():
+    from app.dialogue import check_ack, check_reply
+    assert check_ack("पानी बढ़ रहा है, समझ गई!", "hi-IN")[0] == "पानी बढ़ रहा है, समझ गई।"
+    assert check_reply("Yes! Tell me the pin code.", "en-IN")[0] == "Yes, Tell me the pin code."

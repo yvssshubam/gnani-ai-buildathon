@@ -69,6 +69,10 @@ def sounds_like_promise(text: str) -> bool:
     return any(w in low for w in PROMISE_WORDS) or bool(CLOCK_TIME.search(low))
 
 
+def _no_exclamation(text: str) -> str:
+    return " ".join(text.replace("!", ",").split()).rstrip(", ")
+
+
 def check_ack(ack: Optional[str], lang: str) -> tuple[Optional[str], str]:
     """Accept the LLM's short acknowledgement only if it is short, in the right language and promises nothing
     (no times). Echoing a house number is fine.
@@ -84,7 +88,9 @@ def check_ack(ack: Optional[str], lang: str) -> tuple[Optional[str], str]:
         return None, f"wrong language ({detect_script_language(a)})"
     if sounds_like_promise(a):
         return None, "sounds like a promise"
-    return (a if a[-1] in ".!।" else a + ("।" if lang == "hi-IN" else ".")), "ok"
+    # "पानी बढ़ रहा है, समझ गई!" is spoken cheerfully by the voice: no exclamation marks on this line
+    a = _no_exclamation(a)
+    return (a if a[-1] in ".।" else a + ("।" if lang == "hi-IN" else ".")), "ok"
 
 
 def check_reply(reply: Optional[str], lang: str) -> tuple[Optional[str], str]:
@@ -99,7 +105,8 @@ def check_reply(reply: Optional[str], lang: str) -> tuple[Optional[str], str]:
         return None, f"wrong language ({detect_script_language(r)})"
     if sounds_like_promise(r):
         return None, "sounds like a promise"
-    return (r if r[-1] in ".!?।" else r + ("।" if lang == "hi-IN" else ".")), "ok"
+    r = _no_exclamation(r)
+    return (r if r[-1] in ".?।" else r + ("।" if lang == "hi-IN" else ".")), "ok"
 
 
 def safe_ack(ack: Optional[str], lang: str) -> Optional[str]:

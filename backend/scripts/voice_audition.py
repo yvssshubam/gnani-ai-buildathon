@@ -2,7 +2,7 @@
 
 Each voice says the same six moments of a call, through the same pipeline as a real call (pace
 per kind of line, read-back split, parts joined into one clip), so what you hear is what callers
-will hear. Listen with the questions in VOICE_REVIEW.md in mind: does it sound like a calm, clear
+will hear. Listen with the questions in docs/voice-review.md in mind: does it sound like a calm, clear
 person at a control room, or does it sound breathy, intimate or flat?
 
 Run from flood-sos/backend with the venv active:
