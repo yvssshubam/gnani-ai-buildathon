@@ -155,45 +155,101 @@ def _retry_wait(err: Exception) -> Optional[float]:
     return None
 
 
+def _unreachable(err: Exception) -> bool:
+    """The endpoint itself is down (no connection, a timeout, a dead tunnel), not just this request."""
+    if isinstance(err, httpx.HTTPStatusError):
+        return err.response.status_code >= 500
+    return isinstance(err, httpx.TransportError)
+
+
 class OpenAICompatLLM:
+    """Up to three endpoints, all OpenAI-compatible:
+      - live:     LLM_BASE_URL, for the caller's turn (extract, phrase)
+      - notes:    NOTES_LLM_BASE_URL if set, for notes and the simulated caller; else the live one
+      - fallback: LLM_FALLBACK_BASE_URL if set, tried when the endpoint a job belongs to fails
+    With none of the optional ones set, this behaves exactly as a single endpoint."""
+
     def __init__(self) -> None:
         if not settings.llm_api_key:
             raise RuntimeError("LLM_API_KEY is empty. Set it in backend/.env or use LLM_PROVIDER=fake.")
-        self.client = httpx.Client(
-            base_url=settings.llm_base_url.rstrip("/"),
-            headers={"Authorization": f"Bearer {settings.llm_api_key}"},
-            timeout=settings.llm_timeout,
-        )
+        self.client = self._client(settings.llm_base_url, settings.llm_api_key)
+        self.notes_client: Optional[httpx.Client] = None
+        if settings.notes_llm_base_url:
+            self.notes_client = self._client(settings.notes_llm_base_url,
+                                             settings.notes_llm_api_key or settings.llm_api_key)
+        self.fallback: Optional[httpx.Client] = None
+        if settings.llm_fallback_base_url and settings.llm_fallback_api_key and settings.llm_fallback_model:
+            self.fallback = self._client(settings.llm_fallback_base_url, settings.llm_fallback_api_key)
         # After a 429, background work (notes) waits until this time so the live call gets the quota.
         self.cooldown_until = 0.0
+        # An endpoint that was unreachable is skipped until this time (per endpoint name).
+        self.down_until: dict[str, float] = {}
+        # How many answers came from where: shown at /api/health, so a demo can say which model spoke.
+        self.calls: dict[str, int] = {"live": 0, "notes": 0, "fallback": 0}
 
-    def _chat(self, messages: list[dict], json_mode: bool, max_tokens: Optional[int] = None,
-              model: Optional[str] = None) -> tuple[str, int]:
-        model = model or settings.llm_model
+    @staticmethod
+    def _client(base_url: str, api_key: str) -> httpx.Client:
+        return httpx.Client(base_url=base_url.rstrip("/"), headers={"Authorization": f"Bearer {api_key}"},
+                            timeout=settings.llm_timeout)
+
+    def _post(self, client: httpx.Client, where: str, model: str, messages: list[dict], json_mode: bool,
+              max_tokens: Optional[int], timeout: Optional[float] = None) -> tuple[str, int]:
+        """One request to one endpoint. Raises on an HTTP error or an empty reply."""
         body = {"model": model, "messages": messages, "temperature": 0.2,
                 "max_tokens": max_tokens or settings.llm_max_tokens}
-        effort = settings.llm_reasoning_effort or ("low" if "gpt-oss" in model else "")
+        # LLM_REASONING_EFFORT belongs to the live endpoint's model; elsewhere only the gpt-oss rule applies
+        effort = (settings.llm_reasoning_effort if where == "live" else "") or ("low" if "gpt-oss" in model else "")
         if effort:
             # gpt-oss reasons before it answers; on "medium" it can spend the whole allowance
             # thinking and write nothing (Groq then fails JSON mode with an empty generation)
             body["reasoning_effort"] = effort
         if json_mode:
             body["response_format"] = {"type": "json_object"}
+        if where == "live":
+            body.update(settings.llm_extra_body)
+        elif where == "notes":
+            body.update(settings.notes_llm_extra_body)
         t0 = time.perf_counter()
-        r = self.client.post("/chat/completions", json=body)
+        r = client.post("/chat/completions", json=body, **({"timeout": timeout} if timeout else {}))
         if r.status_code == 429:
             self.cooldown_until = time.time() + _retry_after(r, default=10.0)
         if r.status_code >= 400:
-            log.warning("LLM HTTP %s: %s", r.status_code, r.text[:300])
+            log.warning("LLM HTTP %s (%s): %s", r.status_code, where, r.text[:300])
         r.raise_for_status()
         data = r.json()
         content = data["choices"][0]["message"].get("content") or ""
         tokens = int((data.get("usage") or {}).get("total_tokens") or 0)
-        log.info("LLM %s call: %.0f ms, %s tokens", "extract" if json_mode else "phrase",
-                 (time.perf_counter() - t0) * 1000, tokens)
+        log.info("LLM %s call (%s, %s): %.0f ms, %s tokens", "extract" if json_mode else "phrase",
+                 where, model, (time.perf_counter() - t0) * 1000, tokens)
         if not content.strip():
             raise ValueError("LLM returned empty content (token limit used up by reasoning?)")
+        self.calls[where] = self.calls.get(where, 0) + 1
         return content, tokens
+
+    def _chat(self, messages: list[dict], json_mode: bool, max_tokens: Optional[int] = None,
+              model: Optional[str] = None) -> tuple[str, int]:
+        # No model given = the caller's live turn. A model given = a background job (notes, the
+        # simulated caller), which may have its own endpoint and can wait longer.
+        live = model is None
+        model = model or settings.llm_model
+        if live or self.notes_client is None:
+            where, client = "live", self.client
+        else:
+            where, client = "notes", self.notes_client
+        timeout = None if live else settings.notes_llm_timeout
+        fallback = self.fallback if self.fallback is not None and self.fallback.base_url != client.base_url else None
+        if fallback is None:
+            return self._post(client, where, model, messages, json_mode, max_tokens, timeout)
+
+        if time.time() >= self.down_until.get(where, 0.0):
+            try:
+                return self._post(client, where, model, messages, json_mode, max_tokens, timeout)
+            except (httpx.HTTPError, ValueError) as err:
+                if _unreachable(err):
+                    self.down_until[where] = time.time() + settings.llm_fallback_cooldown
+                log.warning("LLM %s endpoint failed, using the fallback: %s", where, err)
+        fb_model = settings.llm_fallback_model if live else (settings.llm_fallback_notes_model or settings.llm_fallback_model)
+        return self._post(fallback, "fallback", fb_model, messages, json_mode, max_tokens, timeout)
 
     def extract(self, utterance, last_question, known_summary) -> Extraction:
         messages = [

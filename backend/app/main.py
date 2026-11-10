@@ -74,7 +74,12 @@ class StatusUpdate(BaseModel):
 
 @app.get("/api/health")
 def health():
-    return {"ok": True, "llm": settings.llm_provider, "model": settings.llm_model if settings.llm_provider != "fake" else None}
+    out = {"ok": True, "llm": settings.llm_provider, "model": settings.llm_model if settings.llm_provider != "fake" else None}
+    if hasattr(llm, "calls"):
+        # which endpoint answered how many times: live (LLM_BASE_URL), notes, fallback
+        out["llm_calls"] = dict(llm.calls)
+        out["llm_fallback"] = settings.llm_fallback_model if getattr(llm, "fallback", None) else None
+    return out
 
 
 @app.post("/api/calls")

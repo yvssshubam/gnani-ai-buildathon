@@ -1,4 +1,5 @@
 """Settings read from environment variables (and an optional .env file)."""
+import json
 import os
 from pathlib import Path
 
@@ -16,6 +17,18 @@ def _load_dotenv(path: Path) -> None:
 
 
 _load_dotenv(Path(__file__).resolve().parent.parent / ".env")
+
+
+def _json_env(name: str) -> dict:
+    """A JSON object from an environment variable ({} when unset or not a JSON object)."""
+    raw = os.getenv(name, "").strip()
+    if not raw:
+        return {}
+    try:
+        value = json.loads(raw)
+    except ValueError:
+        return {}
+    return value if isinstance(value, dict) else {}
 
 
 class Settings:
@@ -38,6 +51,29 @@ class Settings:
     notes_min_gap_seconds: float = float(os.getenv("NOTES_MIN_GAP_SECONDS", "20"))
     # Notes write a summary and translate every caller line: the model needs room (its reasoning counts too)
     notes_max_tokens: int = int(os.getenv("NOTES_MAX_TOKENS", "3000"))
+
+    # --- Running on your own model server (e.g. Gnani Evon v3.3 behind Ollama or llama.cpp) ---
+    # Extra fields added to every request to LLM_BASE_URL, as JSON. Use it for switches a server
+    # needs that Groq doesn't, e.g. {"chat_template_kwargs": {"enable_thinking": false}}.
+    llm_extra_body: dict = _json_env("LLM_EXTRA_BODY")
+    # A second endpoint that answers when the first one can't (the notebook serving Evon stopped,
+    # a timeout, a rate limit). Leave empty for no fallback.
+    llm_fallback_base_url: str = os.getenv("LLM_FALLBACK_BASE_URL", "").strip()
+    llm_fallback_api_key: str = os.getenv("LLM_FALLBACK_API_KEY", "").strip()
+    llm_fallback_model: str = os.getenv("LLM_FALLBACK_MODEL", "").strip()
+    # The fallback's model for notes and the simulated caller (default: LLM_FALLBACK_MODEL).
+    llm_fallback_notes_model: str = os.getenv("LLM_FALLBACK_NOTES_MODEL", "").strip()
+    # After the first endpoint is unreachable, go straight to the fallback for this long, so only
+    # one caller turn pays for the timeout.
+    llm_fallback_cooldown: float = float(os.getenv("LLM_FALLBACK_COOLDOWN_SECONDS", "60"))
+    # Notes and the simulated caller can run on their own endpoint (e.g. Evon for notes only,
+    # while the live call stays where it is). Empty = the same endpoint as the live call.
+    notes_llm_base_url: str = os.getenv("NOTES_LLM_BASE_URL", "").strip()
+    notes_llm_api_key: str = os.getenv("NOTES_LLM_API_KEY", "").strip()
+    notes_llm_extra_body: dict = _json_env("NOTES_LLM_EXTRA_BODY")
+    # Notes run in the background, so they can wait longer than a live turn. A self-hosted model
+    # writing a long summary needs it (try 90). Default: the same as LLM_TIMEOUT_SECONDS.
+    notes_llm_timeout: float = float(os.getenv("NOTES_LLM_TIMEOUT_SECONDS", os.getenv("LLM_TIMEOUT_SECONDS", "8")))
     # An area not on our map list ("Sainikpuri", a PIN code) is placed with OpenStreetMap's free
     # address search (Nominatim: at most one request a second, no key). GEOCODE_ENABLED=0 turns it off.
     geocode_enabled: bool = os.getenv("GEOCODE_ENABLED", "1").strip() not in ("0", "false", "no", "")
