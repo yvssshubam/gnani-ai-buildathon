@@ -138,11 +138,16 @@ def test_voice_turn_places_the_area_while_the_reply_is_spoken(monkeypatch, tmp_p
             return Transcript(text="Sainikpuri, pin code 500094", language="en-IN", seconds=0.1)
 
     class TTS:
-        async def synthesize(self, text, lang):
+        model = "timbre-v2.5"
+
+        async def synthesize(self, text, lang, speed=None):
             await asyncio.sleep(0.05)
             return b""
 
-        def cached_path(self, text, lang):
+        def cached_path(self, text, lang, speed=None):
+            return tmp_path / "x.wav"
+
+        def join(self, paths, gaps_ms):
             return tmp_path / "x.wav"
 
     table = {"Sainikpuri, pin code 500094": dict(locality="Sainikpuri", pincode="500094", spoken_language="en-IN")}

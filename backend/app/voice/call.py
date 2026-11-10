@@ -1,11 +1,14 @@
 """One voice turn: caller audio -> Prisma -> CallSession.handle (Phase 1, unchanged) -> Timbre audio.
 
-The reply is spoken part by part (acknowledgement, calming line, answer, next question), and
-each part is its own cached audio file. Fixed parts are free after the first call.
+The reply is made part by part (acknowledgement, calming line, answer, next question), and
+each part is its own cached audio file, so fixed parts are free after the first call. The parts
+are then joined into one clip with even gaps (stitch.py), and each kind of line gets its own
+pace (delivery.py).
 """
 from __future__ import annotations
 
 import asyncio
+import logging
 import time
 from dataclasses import dataclass
 from typing import Optional
@@ -15,16 +18,18 @@ from starlette.concurrency import run_in_threadpool
 from .. import phrases
 from ..config import settings
 from ..gazetteer import LOCALITIES
+from . import delivery
 from .gnani_http import GnaniError
+from .stitch import CantStitch
 from .stt import PrismaSTT
 from .tts import TimbreTTS
+
+log = logging.getLogger(__name__)
 
 AUDIO_ROUTE = "/api/voice/audio/"
 PLACE_WAIT_SECONDS = 3.0   # longest a turn waits for an off-map area's map lookup
 
-# phrases.py keys that are pieces of the read-back sentence, never spoken on their own
-READBACK_PIECES = {"people", "person", "including", "at", "near", "door", "floor_n",
-                   "ground", "terrace", "none", "sep"}
+READBACK_PIECES = delivery.READBACK_PIECES
 
 
 # Every request to Prisma is the same whatever language the call is in: the same language hints
@@ -69,20 +74,27 @@ class VoiceState:
 
 
 async def speak(tts: TimbreTTS, parts: list[str], lang: str) -> tuple[list[Optional[str]], int, Optional[str]]:
-    """Audio URL per part (None if that part failed), milliseconds, first error.
+    """Audio URLs for the reply (normally one: the whole reply as one clip), milliseconds, first
+    error. If a piece fails, the pieces are returned separately (None for the failed one).
     A TTS failure never ends the call: the browser shows the text instead."""
     started = time.perf_counter()
-    urls: list[Optional[str]] = []
+    plan = [p for part in parts if part.strip() for p in delivery.pieces(part, lang, tts.model)]
+    paths = []
     error = None
-    for part in parts:
-        if not part.strip():
-            continue
+    for piece in plan:
         try:
-            await tts.synthesize(part, lang)
-            urls.append(AUDIO_ROUTE + tts.cached_path(part, lang).name)
+            await tts.synthesize(piece.text, lang, speed=piece.speed)
+            paths.append(tts.cached_path(piece.text, lang, piece.speed))
         except GnaniError as e:
-            urls.append(None)
+            paths.append(None)
             error = error or str(e)
+    urls: list[Optional[str]] = [AUDIO_ROUTE + p.name if p else None for p in paths]
+    if settings.tts_stitch and paths and all(paths):
+        try:
+            joined = tts.join(paths, [p.gap_ms for p in plan])
+            urls = [AUDIO_ROUTE + joined.name]
+        except (CantStitch, OSError) as e:
+            log.warning("couldn't join reply audio, playing the parts separately: %s", e)
     return urls, round((time.perf_counter() - started) * 1000), error
 
 

@@ -72,10 +72,11 @@ def test_ordinary_answers_trigger_nothing(text):
 
 # ---------------------------------------------------------------- greeting
 
-def test_greeting_says_automated_and_in_line_and_asks_danger():
+def test_greeting_says_automated_and_what_it_does_and_asks_danger():
     s = session({})
     g = s.ticket.transcript[0].text
-    assert "ऑटोमैटिक असिस्टेंट" in g and "लाइन में" in g and "खतरा" in g
+    assert g.startswith("फ़्लड हेल्पलाइन") and "ऑटोमैटिक असिस्टेंट" in g and "ऑफिसर" in g and "खतरा" in g
+    assert "लाइन में" not in g                             # "you are in line" before they've said a word
     r = s.handle("nahi", "hi-IN")                          # quick-parsed as the danger answer
     assert r["used_llm"] is False and s.ticket.danger.injured is False
 
@@ -184,13 +185,14 @@ def _complete(table_extra, final_extraction):
 def test_p2_is_reviewed_not_called_back():
     s, r = _complete({}, dict(water_level="ankle"))
     assert s.ticket.priority == "P2" and r["done"] and not r["waiting"]
-    assert "An officer will review it" in r["reply"] and "call you back" not in r["reply"]
+    assert "an officer will review them" in r["reply"] and "call you back" not in r["reply"]
 
 
 def test_p1_stays_on_the_line_with_the_battery_offer():
     s, r = _complete({"l4": dict(vulnerable=["elderly"])}, dict(water_level="ankle"))
     assert s.ticket.priority == "P1" and r["waiting"] and not r["done"]
-    assert "An officer will speak to you" in r["reply"] and "hang up to save battery" in r["reply"]
+    assert "An officer will speak to you" in r["reply"] and "you can hang up" in r["reply"]
+    assert "call this number" not in r["reply"]            # no callback promise: callbacks aren't built
 
 
 def test_p0_is_alerted_and_stays_on_the_line():

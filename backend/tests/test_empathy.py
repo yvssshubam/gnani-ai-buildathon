@@ -48,7 +48,7 @@ def test_llm_ack_is_used_in_reply(tmp_path):
                                       ack="பாட்டி கூட இருக்காங்க, புரிஞ்சுது")])
     r = s.handle("எங்க வீட்டுல தண்ணீர், வேளச்சேரி, பாட்டி கூட இருக்காங்க", "ta-IN")
     assert r["reply"].startswith("பாட்டி கூட இருக்காங்க, புரிஞ்சுது.")
-    assert "யாருக்காவது அடிபட்டிருக்கா" in r["reply"]  # then the fixed danger question
+    assert "யாருக்கும் அடிபடலையே" in r["reply"]  # then the fixed danger question
 
 
 def test_bad_ack_falls_back_to_fixed(tmp_path):
@@ -71,10 +71,10 @@ def test_panic_calms_once_and_switches_to_yes_no(tmp_path):
         Extraction(injured=False, panic="high"),
     ])
     r1 = s.handle("help help please please water water", "en-IN")
-    assert "I am here with you" in r1["reply"]
-    assert "Yes or no" in r1["reply"]                    # simple version of the danger question
+    assert "I am right here" in r1["reply"] and "breath" not in r1["reply"]
+    assert "hurt or not" in r1["reply"]                    # simple version of the danger question
     r2 = s.handle("no no nobody hurt please hurry", "en-IN")
-    assert "I am here with you" not in r2["reply"]       # calming line only once
+    assert "I am right here" not in r2["reply"]       # calming line only once
     assert r2["action"] == "ask:area"
 
 
@@ -83,8 +83,8 @@ def test_panicked_caller_repeating_same_thing_gets_a_human(tmp_path):
     s = session(tmp_path, [same.model_copy() for _ in range(6)])
     line = "बचाओ बचाओ, पानी आ गया, जल्दी आओ"
     r1 = s.handle(line, "hi-IN")
-    assert "मैं आपके साथ हूँ" in r1["reply"]               # calming line
-    assert "हाँ या ना" in r1["reply"]                       # straight to yes/no
+    assert "मैं यहीं हूँ" in r1["reply"]               # calming line
+    assert "चोट लगी है या नहीं" in r1["reply"]             # straight to yes/no
     r2 = s.handle(line, "hi-IN")                           # no new info (1) -> same simple question again
     assert r2["action"] == "ask:danger"
     r3 = s.handle(line, "hi-IN")                           # no new info (2) -> human
@@ -101,9 +101,9 @@ def test_calm_caller_gets_three_tries_before_handoff(tmp_path):
     results = [s.handle("hello hello can you hear", "en-IN") for _ in range(3)]
     actions = [r["action"] for r in results]
     # the greeting's danger question + 2 more, none understood -> human. On the 2nd unclear turn
-    # the ladder says "give the phone to one person" first (design v2, 8.4).
+    # the ladder says the line is breaking up and asks for one person at a time (design v2, 8.4).
     assert actions == ["ask:danger", "ask:danger", "handoff"], actions
-    assert "give the phone to one person" in results[1]["reply"]
+    assert "one person at a time" in results[1]["reply"]
 
 
 def test_no_empty_readback(tmp_path):
@@ -128,7 +128,7 @@ def test_location_given_instead_of_danger_answer(tmp_path):
     assert "इलाके का नाम" not in r2["reply"]                  # never asks for the area it already has
     r3 = s.handle("कोई घायल नहीं, पानी बढ़ रहा है", "hi-IN")
     assert r3["action"] == "ask:street"                        # next missing part of the address only
-    assert "कौन सी गली" in r3["reply"]
+    assert "गली कौन सी है" in r3["reply"]
 
 
 def test_dont_know_street_is_an_answer_not_stuck(tmp_path):

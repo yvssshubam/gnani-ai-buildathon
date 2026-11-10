@@ -4,7 +4,8 @@ Run from flood-sos/backend with the venv active (the server doesn't need to be r
     python scripts\\prewarm_voice.py            # all reply languages
     python scripts\\prewarm_voice.py --dry-run  # only list what would be generated
 
-Run it again after changing phrases.py, TTS_VOICES or TTS_SPEED: only new lines cost credits.
+Run it again after changing phrases.py, TTS_MODEL, TTS_VOICES, TTS_SPEED, TTS_PACE or TTS_TAGS:
+only new lines cost credits.
 """
 import argparse
 import asyncio
@@ -17,7 +18,7 @@ import httpx  # noqa: E402
 
 from app import prompts  # noqa: E402
 from app.config import settings  # noqa: E402
-from app.voice.call import fixed_lines  # noqa: E402
+from app.voice.delivery import fixed_pieces  # noqa: E402
 from app.voice.gnani_http import GnaniError  # noqa: E402
 from app.voice.tts import TimbreTTS  # noqa: E402
 
@@ -27,24 +28,26 @@ async def main(dry_run: bool) -> int:
     missing = [lang for lang in settings.supported_reply_langs if lang not in settings.tts_voices]
     if missing:
         print(f"No voice set in TTS_VOICES for {', '.join(missing)}: those replies use the fallback voice.")
-    lines = fixed_lines(langs, extra=[(prompts.GREETING["text"], prompts.GREETING["lang"])])
+    # each line at the pace its kind of line is spoken at, plus the fixed halves of the read-back
+    lines = fixed_pieces(langs, extra=[(prompts.GREETING["text"], prompts.GREETING["lang"])])
 
     async with httpx.AsyncClient(timeout=settings.gnani_timeout) as client:
         tts = TimbreTTS(client)
-        todo = [(text, lang) for text, lang in lines if not tts.cached_path(text, lang).exists()]
+        todo = [(text, lang, speed) for text, lang, speed in lines
+                if not tts.cached_path(text, lang, speed).exists()]
         print(f"{len(lines)} fixed lines in {', '.join(langs)}: {len(lines) - len(todo)} cached, {len(todo)} to generate")
         if dry_run or not todo:
-            for text, lang in todo:
-                print(f"  {lang}  {text[:70]}")
+            for text, lang, speed in todo:
+                print(f"  {lang} x{speed:<4} {text[:70]}")
             return 0
         if not settings.gnani_api_key:
             print("GNANI_API_KEY is not set in .env")
             return 1
         failed = 0
-        for i, (text, lang) in enumerate(todo, 1):
+        for i, (text, lang, speed) in enumerate(todo, 1):
             try:
-                await tts.synthesize(text, lang)
-                print(f"  [{i}/{len(todo)}] {lang} {tts.voice_for(lang)[1]:8} {text[:60]}")
+                await tts.synthesize(text, lang, speed=speed)
+                print(f"  [{i}/{len(todo)}] {lang} {tts.voice_for(lang)[1]:8} x{speed:<4} {text[:60]}")
             except GnaniError as e:
                 failed += 1
                 print(f"  [{i}/{len(todo)}] FAILED {lang}: {e}")

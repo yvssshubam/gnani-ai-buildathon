@@ -112,8 +112,18 @@ class Settings:
     tts_sample_rate: int = int(os.getenv("TTS_SAMPLE_RATE", "16000"))
     tts_speed: float = float(os.getenv("TTS_SPEED", "1.0"))
     tts_cache_dir: str = os.getenv("TTS_CACHE_DIR", "tts_cache")
+    # Pace per kind of line, as a factor on TTS_SPEED (see app/voice/delivery.py).
+    tts_pace: str = os.getenv("TTS_PACE", "plain:1.0,steady:0.95,brisk:1.05,readback:0.9")
+    # Timbre v3.0 only: an audio tag per kind of line, e.g. "readback:<slow>". Empty = no tags.
+    tts_tags: str = os.getenv("TTS_TAGS", "")
+    # The parts of one reply are joined into one clip with this much silence between them
+    # (half of it after a short "Okay."). TTS_STITCH=0 plays the parts as separate clips, as before.
+    tts_gap_ms: int = int(os.getenv("TTS_GAP_MS", "280"))
+    tts_stitch: bool = os.getenv("TTS_STITCH", "1").strip() not in ("0", "false", "no", "")
 
-    # Simulated callers (demo): a different voice from the agent's, per language.
+    # Simulated callers (demo): a different voice from the agent's, per language. Their own model,
+    # so the agent can move to Timbre v3.0 while the caller voices stay on v2.5.
+    sim_caller_tts_model: str = os.getenv("SIM_CALLER_TTS_MODEL", "timbre-v2.5")
     sim_caller_voices: dict[str, str] = dict(
         pair.split(":", 1) for pair in
         os.getenv("SIM_CALLER_VOICES", "hi-IN:Chitra,ta-IN:Trisha,te-IN:Lavanya,en-IN:Trupti").split(",")

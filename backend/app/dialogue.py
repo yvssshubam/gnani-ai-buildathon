@@ -122,6 +122,18 @@ class Action:
 
 # "Shall I tell you?" in the four languages, in their scripts and in English letters. Checked by
 # rule because the LLM misses some wordings ("చెప్పమంటావా?" when it only knows "చెప్పనా?").
+# After a plain answer: "Okay." / "Got it." / "Yes, noted.", in turn.
+ACKS = ("ack", "ack2", "ack3")
+
+
+def names_place_or_number(e: Extraction) -> bool:
+    """Did this turn give part of an address, or how many people there are?"""
+    return any(v is not None and v != "" for v in (e.locality, e.street, e.door_no, e.building, e.landmark,
+                                                   e.floor, e.pincode, e.people_count))
+
+
+WRONG_DETAILS_REASON = "caller says the details are wrong but could not say what - officer to confirm"
+
 OFFER_TO_TELL = [
     # English
     "shall i tell", "should i tell", "can i tell", "may i tell", "shall i say", "should i say",
@@ -266,7 +278,11 @@ class CallSession:
         # or the caller wants a human, the line stays open and the caller waits in line for an
         # officer. The AI stops asking, keeps listening and filling the ticket, and reassures.
         self.waiting = False
-        self.human_requests = 0                # "let me talk to a person": first -> ack + one question
+        self.human_requests = 0                # "let me talk to a person": first -> told an officer will speak, questions go on
+        self.handoff_reason: Optional[str] = None  # why the next handover happens, if not the usual reason
+        self.calm_pending = False              # the calming line, held back a turn (see _say)
+        self.acks_said = 0                     # fixed acknowledgements said so far (they take turns)
+        self.relief_said = False               # "thank goodness everyone is all right" (once a call)
         self.told_still_in_line = False        # said "you're still in line" since waiting began
         self.unclear_turns = 0                 # consecutive turns we couldn't understand
         self.one_person_said = False           # "give the phone to one person" (once a call)
@@ -539,6 +555,11 @@ class CallSession:
                 # the same read-back word for word
                 if last.kind != "ask_correction":
                     return Action("ask_correction")
+            if last.kind == "ask_correction":
+                # We asked what is wrong and still got nothing we can use. Reading the same
+                # sentence back again helps nobody: an officer sorts it out with the caller.
+                self.handoff_reason = WRONG_DETAILS_REASON
+                return Action("handoff")
             return self._readback_or_close()
 
         # Not getting anywhere? A human takes over (open -> yes/no -> human).
@@ -658,13 +679,32 @@ class CallSession:
                     log.info("ack not used: %s (%r)", reason, e.ack)
             else:
                 self.ack_status = "quick (fixed)"
-            if llm_ack:
+            if a.kind == "ask" and self._relief_fits(e):
+                # "Thank goodness everyone is all right": once, and only when it is true
+                parts.append(phrases.say("relief", lang))
+                self.relief_said = True
+                self.ack_status = "relief"
+            elif llm_ack and names_place_or_number(e):
+                # Repeating a detail back is worth it for an address or a number (the caller hears
+                # we got it right). Doing it on every turn is what made the agent sound like a machine.
                 parts.append(llm_ack)
-            elif a.kind == "ask" and not e.unclear:
-                parts.append(phrases.say("ack", lang))
-        if new_panic and not self.calmed:
-            parts.append(phrases.say("calm", lang))
-            self.calmed = True
+            elif a.kind == "ask" and not e.unclear and not self.panic:
+                # (a bare "Okay." after "we are going to die" is worse than saying nothing)
+                if llm_ack:
+                    self.ack_status = "fixed (the turn had no address or number to repeat)"
+                parts.append(phrases.say(ACKS[self.acks_said % len(ACKS)], lang))
+                self.acks_said += 1
+        if (new_panic or self.calm_pending) and not self.calmed:
+            if (a.urgent_preface or e.caller_question in ANSWERABLE
+                    or (self.calm_pending and not new_panic and a.kind != "ask")):
+                # "Your case is most urgent, an officer is being alerted" (or the answer to what
+                # they just asked) is what this turn says. With the calming line too, the caller
+                # would hear four or five sentences before the question, so it waits for the next
+                # plain question we ask.
+                self.calm_pending = True
+            else:
+                parts.append(phrases.say("calm", lang))
+                self.calmed, self.calm_pending = True, False
         if e.caller_question == "when_help":
             parts.append(phrases.say("status_deflect", lang))   # no time, no promise
         elif e.caller_question in ANSWERABLE:
@@ -676,6 +716,14 @@ class CallSession:
         self.last_parts = parts
         return " ".join(parts)
 
+    def _relief_fits(self, e: Extraction) -> bool:
+        """The caller just said nobody is hurt, and nothing else about the case is worrying."""
+        t, d = self.ticket, self.ticket.danger
+        return (not self.relief_said and e.injured is False and not self.panic
+                and t.priority != "P0" and not t.escalate_to_human and not t.vulnerable and not t.medical_need
+                and d.water_rising is not True and not d.trapped and not d.medical_emergency
+                and not d.structure_unsafe and d.water_level not in ("waist", "chest", "neck", "roof"))
+
     def _needs_location_callback(self) -> bool:
         # Area-only or unknown is not enough for a boat to find the house,
         # even if the caller confirmed it. A human calls back first.
@@ -686,7 +734,8 @@ class CallSession:
         t.call_state = CallState.HANDED_OFF
         t.status = Status.NEEDS_CALLBACK
         t.escalate_to_human = True
-        reason = "caller could not give details (panic / no answers) - human officer needed"
+        reason = self.handoff_reason or "caller could not give details (panic / no answers) - human officer needed"
+        self.handoff_reason = None
         if reason not in t.followup_reasons:
             t.followup_reasons.append(reason)
         if "needs human: caller could not answer" not in t.priority_reasons:
@@ -694,8 +743,10 @@ class CallSession:
         self._start_waiting()
 
     def _stays_on_line(self) -> bool:
-        """P0 and P1 callers stay on the line for an officer; P2 and P3 are reviewed, not called."""
-        return self.ticket.priority in ("P0", "P1") or self.ticket.escalate_to_human
+        """P0 and P1 callers stay on the line for an officer; P2 and P3 are reviewed, not called.
+        A caller who asked for a person was told an officer will speak to them, so they stay too."""
+        return (self.ticket.priority in ("P0", "P1") or self.ticket.escalate_to_human
+                or self.human_requests > 0)
 
     def _start_waiting(self) -> None:
         t = self.ticket

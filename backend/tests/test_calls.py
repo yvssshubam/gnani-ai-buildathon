@@ -98,12 +98,14 @@ def test_dropped_call_keeps_partial_ticket():
 
 
 def test_asking_for_a_person_is_kept_in_line_not_marked_urgent():
-    """Design v2, 5.4: no operator free -> "you're in line", then one useful question.
+    """Design v2, 5.4: no operator free -> "an officer will speak to you when one is free", and the
+    questions go on (so the caller doesn't have to repeat everything to the officer).
     It is not a P0: the caller must not hear "your case is marked most urgent"."""
     _, replies, r = call("I want to talk to a real person, we are in Saidapet")
     assert r["ticket"]["escalate_to_human"] is False
     assert "most urgent" not in replies[0][1]
-    assert "You are in line for an officer. While you wait, one question." in replies[0][1]
+    assert "an officer will speak to you when one is free" in replies[0][1]
+    assert "one question" not in replies[0][1]            # it was never just one
     assert replies[0][0].startswith("ask:")
     assert "caller asked for a person" in r["ticket"]["followup_reasons"]
 

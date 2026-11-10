@@ -146,9 +146,12 @@ def test_correction_with_new_details_reads_back_again():
     assert s._next_action(Extraction(confirmation="no", correction=True)).kind == "readback"
 
 
-def test_second_no_after_asking_what_is_wrong_does_not_loop():
+def test_second_no_after_asking_what_is_wrong_goes_to_an_officer():
+    """We asked what is wrong and got nothing new: reading the same sentence back again helps
+    nobody, so an officer sorts it out with the caller."""
     s = _session_after_readback("ask_correction")
-    assert s._next_action(Extraction(confirmation="no")).kind in ("readback", "close")
+    assert s._next_action(Extraction(confirmation="no")).kind == "handoff"
+    assert "details are wrong" in s.handoff_reason
 
 
 def test_yes_closes():

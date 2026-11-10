@@ -76,6 +76,8 @@ GREETING = {
     # Measured: 10.2 s (first version), 7.7 s (with "Any language."). This one drops the English tag
     # (the call follows whatever language the caller answers in) and one full stop's pause.
     # "ऑटोमैटिक असिस्टेंट" is the disclosure, and English speakers understand it too.
-    "text": "बाढ़ हेल्पलाइन, ऑटोमैटिक असिस्टेंट। आप लाइन में हैं, क्या किसी की जान को खतरा है?",
+    # Now: "Flood helpline" (the English word, as callers say it), and what the assistant will do
+    # instead of "you are in line", which sounded like being put on hold before the caller had spoken.
+    "text": "फ़्लड हेल्पलाइन, ऑटोमैटिक असिस्टेंट। आपकी बात ऑफिसर को बताऊँगी। क्या किसी की जान को खतरा है?",
     "lang": "hi-IN",
 }

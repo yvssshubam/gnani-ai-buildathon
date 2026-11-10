@@ -148,7 +148,8 @@ def _voice_clients() -> tuple[PrismaSTT, TimbreTTS]:
         client = httpx.AsyncClient(timeout=settings.gnani_timeout)
         voice["stt"] = PrismaSTT(client, keyterms=keyterms())
         voice["tts"] = TimbreTTS(client)
-        voice["caller_tts"] = TimbreTTS(client, voices=settings.sim_caller_voices)
+        voice["caller_tts"] = TimbreTTS(client, voices=settings.sim_caller_voices,
+                                        model=settings.sim_caller_tts_model)
     return voice["stt"], voice["tts"]
 
 

@@ -4,12 +4,14 @@ from fastapi.testclient import TestClient
 
 from app import main, phrases
 from app.models import Extraction
+from app.voice import stitch
 from app.voice.call import fixed_lines, keyterms
 from app.voice.gnani_http import GnaniError
 from app.voice.stt import Transcript
 from app.voice.tts import TimbreTTS
 
-WAV = b"RIFF" + b"\0" * 60
+# a real 16 kHz clip (0.1 s quiet, 0.2 s of sound, 0.3 s quiet), so replies can be joined
+WAV = stitch.write_wav(stitch.Clip(16000, stitch.array("h", [0] * 1600 + [3000, -3000] * 1600 + [0] * 4800)))
 
 
 class FakeSTT:
@@ -38,9 +40,9 @@ def api(tmp_path, monkeypatch):
                     fallback_lang="hi-IN", cache_dir=str(tmp_path / "cache"))
     spoken = []
 
-    async def fake_synth(text, lang):  # writes the cache file like the real one, no HTTP
+    async def fake_synth(text, lang, speed=None):  # writes the cache file like the real one, no HTTP
         spoken.append((text, lang))
-        tts.cached_path(text, lang).write_bytes(WAV)
+        tts.cached_path(text, lang, speed).write_bytes(WAV)
         return WAV
     monkeypatch.setattr(tts, "synthesize", fake_synth)
     monkeypatch.setattr(main.settings, "tts_cache_dir", str(tmp_path / "cache"))
@@ -63,7 +65,8 @@ def test_start_speaks_the_greeting(api):
     call = start(api)
     assert call["greeting"] and len(call["audio"]) == 1
     audio = api.get(call["audio"][0])
-    assert audio.status_code == 200 and audio.content == WAV
+    # the greeting's own leading and trailing silence is trimmed
+    assert audio.status_code == 200 and 0 < stitch.duration_ms(audio.content) < stitch.duration_ms(WAV)
 
 
 def test_turn_runs_the_dialogue_and_speaks_each_part(api):
@@ -75,7 +78,9 @@ def test_turn_runs_the_dialogue_and_speaks_each_part(api):
     assert res["heard"] == "हम वेलाचेरी में हैं, कोई घायल नहीं" and res["heard_lang"] == "hi-IN"
     assert res["reply_lang"] == "hi-IN" and res["reply"]
     assert " ".join(res["reply_parts"]) == res["reply"]
-    assert len(res["audio"]) == len(res["reply_parts"]) and all(res["audio"])
+    # every part is made (and cached) on its own, then the reply plays as one clip
+    assert len(res["reply_parts"]) >= 2 and len(api.spoken) >= 3   # greeting + each part
+    assert len(res["audio"]) == 1 and api.get(res["audio"][0]).status_code == 200
     assert res["ticket"]["location"]["locality"] == "Velachery"
     # the greeting is NOT sent as context: it would push the first transcription toward its language
     assert api.stt.contexts[0] is None
@@ -121,7 +126,7 @@ def test_tts_failure_still_returns_the_text(api, monkeypatch):
     call = start(api)
     tts = main.voice["tts"]
 
-    async def broken(text, lang):
+    async def broken(text, lang, speed=None):
         raise GnaniError("TTS", 402, "", "no credit")
     monkeypatch.setattr(tts, "synthesize", broken)
     api.stt.queue.append(("हम वेलाचेरी में हैं", "hi-IN"))

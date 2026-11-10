@@ -1,4 +1,4 @@
-"""Timbre v2.5 text to speech, with a disk cache.
+"""Timbre text to speech (v2.5, or v3.0 with TTS_MODEL), with a disk cache.
 
 Every line callers hear comes from phrases.py, so most replies are the exact same text every
 call. Each (voice, language, text) is synthesised once and then served from disk: no credits,
@@ -13,6 +13,7 @@ from typing import Iterable, Optional
 import httpx
 
 from ..config import settings
+from . import stitch
 from .gnani_http import GnaniError, post
 
 
@@ -44,21 +45,38 @@ class TimbreTTS:
         first = next(iter(self.voices))  # TTS_VOICES has no entry for FALLBACK_REPLY_LANG
         return first, self.voices[first]
 
-    def _key(self, text: str, lang: str, voice: str) -> str:
-        raw = "|".join([self.model, voice, lang, str(self.speed), str(self.sample_rate), text])
+    def _key(self, text: str, lang: str, voice: str, speed: float) -> str:
+        raw = "|".join([self.model, voice, lang, str(speed), str(self.sample_rate), text])
         return hashlib.sha256(raw.encode("utf-8")).hexdigest()[:32]
 
-    def cached_path(self, text: str, lang: str) -> Path:
+    def cached_path(self, text: str, lang: str, speed: Optional[float] = None) -> Path:
         lang, voice = self.voice_for(lang)
-        return self.cache_dir / f"{self._key(text.strip(), lang, voice)}.wav"
+        return self.cache_dir / f"{self._key(text.strip(), lang, voice, speed or self.speed)}.wav"
 
-    async def synthesize(self, text: str, lang: str) -> bytes:
+    def joined_path(self, paths: list[Path], gaps_ms: list[int]) -> Path:
+        """Where the clips at paths, joined with these gaps, are kept (same naming as single lines)."""
+        raw = "join|" + "|".join(p.name for p in paths) + "|" + ",".join(map(str, gaps_ms))
+        return self.cache_dir / f"{hashlib.sha256(raw.encode()).hexdigest()[:32]}.wav"
+
+    def join(self, paths: list[Path], gaps_ms: list[int]) -> Path:
+        """One clip from several cached ones: own silences trimmed, our gaps in between.
+        Raises stitch.CantStitch if the clips can't be joined (the caller plays them separately)."""
+        out = self.joined_path(paths, gaps_ms)
+        if not out.exists():
+            data = stitch.join([p.read_bytes() for p in paths], gaps_ms)
+            tmp = out.with_suffix(".tmp")
+            tmp.write_bytes(data)
+            os.replace(tmp, out)
+        return out
+
+    async def synthesize(self, text: str, lang: str, speed: Optional[float] = None) -> bytes:
         """WAV bytes for text in lang. Served from the cache when this exact line was said before."""
         text = text.strip()
         if not text:
             raise ValueError("empty text")
+        speed = speed or self.speed
         lang, voice = self.voice_for(lang)
-        key = self._key(text, lang, voice)
+        key = self._key(text, lang, voice, speed)
         path = self.cache_dir / f"{key}.wav"
 
         # One lock per line, so two parallel calls asking for the same new line pay for it once.
@@ -69,7 +87,7 @@ class TimbreTTS:
                 return path.read_bytes()
             body = {
                 "text": text, "voice": voice, "model": self.model, "language": lang,
-                "speed": self.speed,
+                "speed": speed,
                 "audio_config": {"sample_rate": self.sample_rate, "num_channels": 1,
                                  "sample_width": 2, "encoding": "linear_pcm", "container": "wav"},
             }
@@ -84,11 +102,12 @@ class TimbreTTS:
             os.replace(tmp, path)  # atomic: a crash never leaves a half-written cache file
             return r.content
 
-    async def prewarm(self, lines: Iterable[tuple[str, str]]) -> int:
-        """Synthesise (text, lang) pairs ahead of the demo, one at a time to respect rate limits.
-        Returns how many new lines were generated."""
+    async def prewarm(self, lines: Iterable[tuple]) -> int:
+        """Synthesise (text, lang) or (text, lang, speed) ahead of the demo, one at a time to
+        respect rate limits. Returns how many new lines were generated."""
         before = self.api_calls
-        for text, lang in lines:
-            if text.strip() and not self.cached_path(text, lang).exists():
-                await self.synthesize(text, lang)
+        for text, lang, *rest in lines:
+            speed = rest[0] if rest else None
+            if text.strip() and not self.cached_path(text, lang, speed).exists():
+                await self.synthesize(text, lang, speed=speed)
         return self.api_calls - before

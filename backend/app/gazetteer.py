@@ -32,8 +32,8 @@ LOCALITIES: list[dict] = [
     {"name": "Adyar", "aliases": ["adyar", "adayar", "அடையாறு", "அடையார்"], "lat": 13.0012, "lon": 80.2565},
     {"name": "Kotturpuram", "aliases": ["kotturpuram", "கோட்டூர்புரம்"], "lat": 13.0186, "lon": 80.2406},
     {"name": "Saidapet", "aliases": ["saidapet", "சைதாப்பேட்டை"], "lat": 13.0213, "lon": 80.2231},
-    {"name": "T. Nagar", "aliases": ["t nagar", "t. nagar", "thyagaraya nagar", "தி. நகர்", "தியாகராய நகர்"], "lat": 13.0418, "lon": 80.2341},
-    {"name": "K.K. Nagar", "aliases": ["kk nagar", "k.k. nagar", "k k nagar", "கே.கே. நகர்", "கே.கே.நகர்"], "lat": 13.0410, "lon": 80.1990},
+    {"name": "T. Nagar", "aliases": ["t nagar", "t. nagar", "thyagaraya nagar", "தி. நகர்", "தியாகராய நகர்", "टी नगर", "टी. नगर", "టీ నగర్", "టి నగర్"], "lat": 13.0418, "lon": 80.2341},
+    {"name": "K.K. Nagar", "aliases": ["kk nagar", "k.k. nagar", "k k nagar", "கே.கே. நகர்", "கே.கே.நகர்", "के के नगर", "केके नगर", "के.के. नगर", "కేకే నగర్", "కె.కె. నగర్"], "lat": 13.0410, "lon": 80.1990},
     {"name": "Ashok Nagar", "aliases": ["ashok nagar", "அசோக் நகர்"], "lat": 13.0350, "lon": 80.2120},
     {"name": "Kodambakkam", "aliases": ["kodambakkam", "கோடம்பாக்கம்"], "lat": 13.0521, "lon": 80.2255},
     {"name": "Mylapore", "aliases": ["mylapore", "மயிலாப்பூர்"], "lat": 13.0339, "lon": 80.2619},
@@ -178,10 +178,12 @@ def match_locality(text: Optional[str]) -> Optional[dict]:
     t = _norm(text)
     if t in _BY_NAME:
         return _BY_NAME[t]
-    # 1) exact alias inside the text (handles Tamil suffixes like வேளச்சேரியில்)
+    # 1) exact alias inside the text. Tamil aliases match inside a longer word (suffixes like
+    #    வேளச்சேரியில்); English-letter aliases only as whole words, so "t nagar" is not found
+    #    inside "vasant nagar".
     for loc in LOCALITIES:
         for alias in loc["aliases"]:
-            if alias in t:
+            if (_whole_words(alias, t) if alias.isascii() else alias in t):
                 return loc
     # Hindi/Telugu script ("वेलाचेरी में"): we only store English + Tamil names, so convert
     # to English letters first: वेलाचेरी -> velacheri.
@@ -189,16 +191,52 @@ def match_locality(text: Optional[str]) -> Optional[dict]:
     if script in ("devanagari", "telugu"):
         t = " ".join(_letters(w, script).lower().replace("chch", "ch")
                      if _script_of(w) else w for w in t.split())
-    # 2) fuzzy match for misspellings / STT slips ("velacheri", "pallikarnai")
-    best, best_score = None, 0
+    # 2) fuzzy match for misspellings / STT slips ("velacheri", "pallikarnai"), word by word.
+    #    Comparing whole strings let any "... Nagar" match "T. Nagar": the shared word "nagar"
+    #    was most of the short name. Now every word of the name has to be there.
+    words = [w for w in re.split(r"[\s.]+", t) if w]
+    best, best_score = None, 0.0
     for loc in LOCALITIES:
         for alias in loc["aliases"]:
             if not alias.isascii():
                 continue
-            score = fuzz.partial_ratio(alias, t) if len(t) > len(alias) else fuzz.ratio(alias, t)
+            score = _fuzzy_words(alias, words)
             if score > best_score:
                 best, best_score = loc, score
     return best if best_score >= 85 else None
+
+
+def _whole_words(alias: str, text: str) -> bool:
+    return re.search(r"(?<![a-z0-9])" + re.escape(alias) + r"(?![a-z0-9])", text) is not None
+
+
+def _fuzzy_words(alias: str, words: list[str]) -> float:
+    """How well `alias` matches some run of `words`, 0-100. Each word of the alias must match a word
+    of the text, in order: short words (the "t" of "t nagar", "kk") exactly, longer ones allowing
+    for a spelling slip. A one-word name may also be split in two by speech-to-text ("vela cheri")."""
+    parts = [a for a in re.split(r"[\s.]+", alias) if a]
+    if not parts:
+        return 0.0
+    best = 0.0
+    for i in range(len(words) - len(parts) + 1):
+        scores = []
+        for a, w in zip(parts, words[i:i + len(parts)]):
+            if len(a) <= 3:
+                score = 100.0 if a == w else 0.0
+            else:
+                score = fuzz.ratio(a, w)
+                if 0 < len(w) - len(a) <= 4:
+                    # a short ending stuck to the name: "tambaramlo" (Telugu "in Tambaram")
+                    score = max(score, fuzz.ratio(a, w[:len(a)]))
+            if score < 80:
+                break
+            scores.append(score)
+        else:
+            best = max(best, sum(scores) / len(scores))
+    if len(parts) == 1 and len(parts[0]) >= 7:
+        for a, b in zip(words, words[1:]):
+            best = max(best, fuzz.ratio(parts[0], a + b))
+    return best
 
 
 SCRIPT_CHECK = {"ta-IN": (0x0B80, 0x0BFF)}

@@ -20,6 +20,7 @@ htmlcov/
 
 # ---- audio produced while testing (costs credits to make, but not needed in the repo) ----
 check_audio/
+voice_audition/
 audio_cache/
 tts_cache/
 stt_cache/

@@ -84,9 +84,9 @@ caller speaks ──► speech-to-text (Gnani Prisma) ──► transcript
                                  text-to-speech (Gnani Timbre) ──► caller
 ```
 
-The call opens with: *"बाढ़ हेल्पलाइन, ऑटोमैटिक असिस्टेंट। आप लाइन में हैं, क्या किसी की जान को खतरा है?"*
-(flood helpline, automatic assistant, you're in line: is anyone's life in danger?). It says
-it's automatic, that the caller is in line, and asks the most important question, in about 5 seconds.
+The call opens with: *"फ़्लड हेल्पलाइन, ऑटोमैटिक असिस्टेंट। आपकी बात ऑफिसर को बताऊँगी। क्या किसी की जान को खतरा है?"*
+(flood helpline, automatic assistant, I'll tell an officer what you say: is anyone's life in danger?).
+It says it's automatic, what it will do with the caller's words, and asks the most important question.
 
 **Ask order:** immediate danger → area → street / house → floor → people → vulnerable people → water level.
 Anything the caller already said is never asked again. Each question gets at most two tries
@@ -112,23 +112,26 @@ Anything the caller already said is never asked again. Each question gets at mos
   Anything too long, in the wrong language or script, or sounding like a promise ("the boat
   is coming in 10 minutes") is thrown away, and the fixed line is used.
 - **It never lies about what happens next.** It never says "we'll call you back" or gives a
-  time. P0 and P1 callers hear that they're in line for an officer and stay on the line;
-  while they wait, a reassurance line plays every 40 seconds of silence.
+  time. P0 and P1 callers hear that an officer will speak to them when one is free and stay on
+  the line; while they wait, a reassurance line plays every 40 seconds of silence.
 - **The waiting room handles what people actually say:**
-  - **"I want to talk to a person."** "You're in line for an officer. Meanwhile, one question."
+  - **"I want to talk to a person."** "An officer will speak to you when one is free. Until then
+    I'll write down your details, so you don't have to repeat them." The call then ends on the
+    line for an officer, even for a stable case, because that is what the caller was told.
     Asked again, or "I won't talk to a machine": straight into the line.
-  - **"Are you a robot?"** An honest yes, and the caller is still in line. Caught in any mix of
-    languages ("మీరు robot?").
-  - **"When will the boat come?"** "I can't give updates or times on this line. Your case is
-    written down." No promise.
+  - **"Are you a robot?"** "Yes, an automatic assistant, not a person. But everything you say is
+    showing on the control room's screen." Caught in any mix of languages ("మీరు robot?").
+  - **"When will the boat come?"** "I don't know the time, and I won't give you a false one. All
+    your details are on the control room's screen." No promise.
   - **Angry or swearing:** acknowledged once, then back to the one thing still missing.
   - **New details while waiting** ("water's at the waist now") are added to the ticket.
 - **The call never loops.** If the caller gives nothing new for 3 turns in a row (2 if they
   are panicking), repeats the same question, or says "I don't know" to everything, the call
   goes to the line for a human officer, with the ticket number. A failed LLM call is our
   problem, not the caller's, so it never counts.
-- **When it can't hear:** first "please say that again", then "give the phone to one person
-  and hold it close to your mouth", then the line for an officer. A line it couldn't
+- **When it can't hear:** first "the line cut out, say that once more", then "the line is
+  breaking up: hold the phone close, one person at a time" (it works for a caller who is alone
+  too), then the line for an officer. A line it couldn't
   understand can't change the call's language, and nothing is guessed from it.
 - **It handles the moments a script misses:**
   - **"What does floor mean?"** The same question in simpler words, not echoed back.
@@ -138,7 +141,17 @@ Anything the caller already said is never asked again. Each question gets at mos
     can see nearby, then moves on and flags the ticket for a callback.
   - **"I'm going to die."** Treated as panic: a calming line first, then simple yes/no questions.
 - **A "no" at the read-back is taken seriously.** "No, that's wrong" with no new details makes
-  the agent ask what's wrong. It never repeats the same read-back word for word.
+  the agent ask what's wrong. It never repeats the same read-back word for word: if the caller
+  still can't say what is wrong, an officer takes over.
+- **The questions work for someone calling about another house.** "Where is help needed?",
+  "which floor?", "how many people are there in all?": a son calling from another city is never
+  asked where *he* is.
+- **It talks like a person, not a form.** After a plain answer it says "ठीक है", "समझ गई" or
+  "हाँ, लिख लिया" in turn, and repeats a detail back only for an address or a number, where
+  hearing it again helps. When the caller says nobody is hurt and nothing else is worrying, it
+  says "शुक्र है, सब ठीक हैं" once. The read-back is one sentence, from the area down to the house.
+- **Frightened callers get fewer words.** No bare "okay" after "we're going to die", no "take a
+  breath", and the urgent line, the calming line and an answer are never stacked on one turn.
 - **Speech recognition makes mistakes, so the ticket only records what's clear.** The LLM reads
   sound-alike errors in context, but a guessed injury, number or place stays off the ticket,
   so the agent asks. "Our house" or "मेरा घर" is never saved as a building or street name.
@@ -237,20 +250,27 @@ Short answers ("4", "haan", "అవును, అంతా కరెక్టే
   the transcript, quoting the caller's exact words and the time.
 - **Call screen** (`#/call`): talk to the agent with your microphone, or run a simulated
   caller with its own Gnani voice, whose audio goes through real speech to text. You hear both
-  sides and watch the ticket fill in. The dropdown has three test calls:
-  1. **Full call, start to finish:** anger, "shall I tell you?", an address off our list with a
-     PIN code, the phone handed to a Telugu neighbour, "what does that mean?", then "when will
-     the boat come?" and "are you a robot?" while waiting for an officer.
-  2. **The caller's voice cracks:** a phone-quality line that breaks up more and more, then
-     recovers. The agent asks again, asks for one person, and never guesses.
-  3. **The ideal call:** every question answered clearly, first time. Read-back, ticket number,
-     call ends.
+  sides and watch the ticket fill in. The dropdown has 21 test calls, one situation each, in
+  Hindi and Telugu (six change language part-way). Every call's description ends with what a
+  good agent should do on it:
+  - **Normal calls (01-04):** the ideal call, everything in one breath, Hindi and English mixed,
+    a caller who only knows the PIN code.
+  - **Life in danger (05-07):** panic ("we are going to die"), a medical emergency in the first
+    sentence, water rising while the caller waits for an officer.
+  - **The caller and the machine (08-11):** angry, asks for a person, refuses to talk to a
+    machine, "are you a robot?" and "when will the boat come?" mid-call.
+  - **Who is calling, and in which language (12-14):** a son calling for parents in another
+    city, the phone handed to a Telugu neighbour, the language changing twice.
+  - **Answers that don't fit (15-18):** a wrong read-back, vague answers, "I don't know" to
+    everything, an old man alone on a line that breaks up.
+  - **Not a rescue (19-21):** food and drinking water only, a live wire and a snake, already
+    rescued and wants to cancel.
 
 ---
 
 ## Testing
 
-- **301 backend tests**, passing. Several replay real test calls word for word.
+- **335 backend tests**, passing (2 more are skipped: they need example call files that aren't in the repo). Several replay real test calls word for word.
 - **Replay tool** (`scripts/replay_calls.py`): write a call as a text file (caller lines,
   optional recordings, expected ticket) and run it through the real engine. Lines can be
   spoken by Gnani's caller voice on a phone-quality line, and made to break up (`crack=1..3`).
@@ -390,6 +410,13 @@ frontend/
 - **Prisma sometimes mishears similar-sounding words** (నీళ్ళు "water" → వీళ్ళు "these people").
   The agent asks rather than guesses, but a headset and clear speech help a lot.
 - **Callbacks and follow-ups are flagged on the ticket;** making the calls is not built yet.
+- **Three things the test calls show and the agent doesn't handle yet:** a caller who was already
+  rescued and wants to cancel (call 21: it asks its usual questions), "is anyone coming or not?"
+  while waiting for an officer (call 07: only set phrases like "when will the boat come" get an
+  answer there), and "I don't know" from someone who isn't at the house (call 12: the question
+  is still asked once more in its yes/no form).
+- **An area name that exists in more than one city** ("Ashok Nagar") is placed in the one on our
+  list. An area that isn't on the list ("Rajendra Nagar") is no longer mistaken for one that is.
 - Ideas designed, not built: spotting a repeat call about the same case, merging reports from
   relatives, a noise benchmark, and flagging claims that don't match nearby reports.
 
