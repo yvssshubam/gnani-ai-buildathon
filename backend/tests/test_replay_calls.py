@@ -2,6 +2,8 @@
 import sys
 from pathlib import Path
 
+import pytest
+
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "scripts"))
 
 import replay_calls as rc  # noqa: E402
@@ -10,8 +12,11 @@ import stress_test as st  # noqa: E402
 from app.llm import FakeLLM  # noqa: E402
 
 EXAMPLES = Path(__file__).resolve().parent.parent / "test_calls"
+# Two tests read example call files from backend/test_calls/. Without that folder they are skipped.
+needs_examples = pytest.mark.skipif(not EXAMPLES.is_dir(), reason="backend/test_calls/ example files are not here")
 
 
+@needs_examples
 def test_pasted_transcript_keeps_only_the_caller_lines():
     call = rc.parse_call_file(EXAMPLES / "live_1337_off_map_address.txt")
     texts = [t for _, t in call["lines"]]
@@ -36,6 +41,7 @@ def test_marked_lines_tags_and_recordings(tmp_path):
     assert call["truth"] == {"vulnerable": ["elderly", "child"], "floor": "second"}
 
 
+@needs_examples
 def test_fact_sheet_file():
     call = rc.parse_call_file(EXAMPLES / "factsheet_wants_a_person.txt")
     assert call["lines"] == [] and "Tambaram" in call["facts"] and call["langs"] == [(1, "hi-IN")]

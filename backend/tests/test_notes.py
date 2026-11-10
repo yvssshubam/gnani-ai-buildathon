@@ -27,22 +27,22 @@ class JsonLLM:
     def __init__(self, reply=None, text=None, fail=False):
         self.reply, self.text, self.fail, self.prompts = reply, text, fail, []
 
-    def chat_json(self, system, user):
+    def chat_json(self, system, user, **kw):
         self.prompts.append(user)
         if self.fail:
             raise RuntimeError("rate limited")
         return self.reply, 10
 
-    def chat_text(self, system, user):
+    def chat_text(self, system, user, **kw):
         self.prompts.append(system + user)
         return self.text
 
 
 class FakeOnly:
-    def chat_json(self, system, user):
+    def chat_json(self, system, user, **kw):
         raise NotImplementedError
 
-    def chat_text(self, system, user):
+    def chat_text(self, system, user, **kw):
         raise NotImplementedError
 
 
